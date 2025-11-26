@@ -62,44 +62,63 @@ def atr(df, period=14):
     return tr.rolling(period, min_periods=1).mean()
 
 def supertrend(df, period=SUPER_PERIOD, multiplier=SUPER_MULT):
+    """
+    Compute Supertrend robustly using scalar access to avoid ambiguous Series truth-values.
+    Returns a dataframe with columns 'ST_bool' (bool) and 'ST_value' (float).
+    """
     df = df.copy()
+    if len(df) < 2:
+        raise ValueError("Not enough data to compute Supertrend (need >= 2 weekly bars).")
+
     atr_series = atr(df, period)
     hl2 = (df["High"] + df["Low"]) / 2.0
 
-    basic_upper = hl2 + multiplier * atr_series
-    basic_lower = hl2 - multiplier * atr_series
+    basic_upper = (hl2 + multiplier * atr_series).values
+    basic_lower = (hl2 - multiplier * atr_series).values
 
-    final_upper = basic_upper.copy()
-    final_lower = basic_lower.copy()
+    n = len(df)
+    final_upper = np.zeros(n, dtype=float)
+    final_lower = np.zeros(n, dtype=float)
+    st_bool = np.zeros(n, dtype=bool)
+    st_value = np.zeros(n, dtype=float)
 
-    trend = [True]  
-    st_value = [basic_lower.iloc[0]]
+    # initialize first values
+    final_upper[0] = basic_upper[0]
+    final_lower[0] = basic_lower[0]
+    st_bool[0] = True  # start bullish by default
+    st_value[0] = final_lower[0]
 
-    for i in range(1, len(df)):
-        # Final upper band
-        if basic_upper.iloc[i] < final_upper.iloc[i-1] or df["Close"].iloc[i-1] > final_upper.iloc[i-1]:
-            final_upper.iloc[i] = basic_upper.iloc[i]
+    close_vals = df["Close"].values
+    high_vals = df["High"].values
+    low_vals = df["Low"].values
+
+    for i in range(1, n):
+        # final upper band
+        if (basic_upper[i] < final_upper[i-1]) or (close_vals[i-1] > final_upper[i-1]):
+            final_upper[i] = basic_upper[i]
         else:
-            final_upper.iloc[i] = final_upper.iloc[i-1]
+            final_upper[i] = final_upper[i-1]
 
-        # Final lower band
-        if basic_lower.iloc[i] > final_lower.iloc[i-1] or df["Close"].iloc[i-1] < final_lower.iloc[i-1]:
-            final_lower.iloc[i] = basic_lower.iloc[i]
+        # final lower band
+        if (basic_lower[i] > final_lower[i-1]) or (close_vals[i-1] < final_lower[i-1]):
+            final_lower[i] = basic_lower[i]
         else:
-            final_lower.iloc[i] = final_lower.iloc[i-1]
+            final_lower[i] = final_lower[i-1]
 
-        # Trend
-        if trend[i-1] and df["Close"].iloc[i] <= final_upper.iloc[i]:
-            trend.append(False)
-        elif not trend[i-1] and df["Close"].iloc[i] >= final_lower.iloc[i]:
-            trend.append(True)
+        # determine trend
+        if st_bool[i-1] and (close_vals[i] <= final_upper[i]):
+            st_bool[i] = False
+        elif (not st_bool[i-1]) and (close_vals[i] >= final_lower[i]):
+            st_bool[i] = True
         else:
-            trend.append(trend[i-1])
+            st_bool[i] = st_bool[i-1]
 
-        st_value.append(final_lower.iloc[i] if trend[i] else final_upper.iloc[i])
+        st_value[i] = final_lower[i] if st_bool[i] else final_upper[i]
 
-    df["ST_bool"] = trend
-    df["ST_value"] = st_value
+    # attach results to dataframe
+    df["ST_bool"] = st_bool.tolist()
+    df["ST_value"] = st_value.tolist()
+    df["ATR"] = atr_series.values
     return df
 
 # ------------------- STRATEGY ENGINE -------------------
