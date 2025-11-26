@@ -63,18 +63,35 @@ def atr(df, period=14):
 
 def supertrend(df, period=SUPER_PERIOD, multiplier=SUPER_MULT):
     """
-    Compute Supertrend robustly using scalar access to avoid ambiguous Series truth-values.
-    Returns a dataframe with columns 'ST_bool' (bool) and 'ST_value' (float).
+    Robust Supertrend implementation.
+    - Coerces all series to numeric scalars
+    - Fills NaNs defensively (backfill then forward fill)
+    - Uses numpy arrays for scalar comparisons
+    Returns dataframe with 'ST_bool', 'ST_value', and 'ATR'.
     """
     df = df.copy()
     if len(df) < 2:
         raise ValueError("Not enough data to compute Supertrend (need >= 2 weekly bars).")
 
-    atr_series = atr(df, period)
-    hl2 = (df["High"] + df["Low"]) / 2.0
+    # ensure numeric columns
+    for col in ["High", "Low", "Close"]:
+        if col not in df.columns:
+            raise ValueError(f"Missing required column '{col}' in dataframe.")
+        df[col] = pd.to_numeric(df[col], errors="coerce")
 
-    basic_upper = (hl2 + multiplier * atr_series).values
-    basic_lower = (hl2 - multiplier * atr_series).values
+    # compute ATR (returns pandas Series)
+    atr_series = atr(df, period)
+    atr_series = pd.to_numeric(atr_series, errors="coerce").fillna(method="bfill").fillna(method="ffill")
+
+    hl2 = ((df["High"] + df["Low"]) / 2.0).pipe(pd.to_numeric, errors="coerce").fillna(method="bfill").fillna(method="ffill")
+
+    # compute basic bands as pandas Series then convert to float numpy arrays
+    basic_upper_pd = (hl2 + multiplier * atr_series)
+    basic_lower_pd = (hl2 - multiplier * atr_series)
+
+    # final conversion to numeric numpy arrays (force float dtype)
+    basic_upper = np.asarray(pd.to_numeric(basic_upper_pd, errors="coerce").fillna(method="bfill").fillna(method="ffill"), dtype=float)
+    basic_lower = np.asarray(pd.to_numeric(basic_lower_pd, errors="coerce").fillna(method="bfill").fillna(method="ffill"), dtype=float)
 
     n = len(df)
     final_upper = np.zeros(n, dtype=float)
@@ -82,15 +99,13 @@ def supertrend(df, period=SUPER_PERIOD, multiplier=SUPER_MULT):
     st_bool = np.zeros(n, dtype=bool)
     st_value = np.zeros(n, dtype=float)
 
-    # initialize first values
+    # initialize
     final_upper[0] = basic_upper[0]
     final_lower[0] = basic_lower[0]
-    st_bool[0] = True  # start bullish by default
+    st_bool[0] = True  # assume bullish start
     st_value[0] = final_lower[0]
 
-    close_vals = df["Close"].values
-    high_vals = df["High"].values
-    low_vals = df["Low"].values
+    close_vals = np.asarray(pd.to_numeric(df["Close"], errors="coerce").fillna(method="bfill").fillna(method="ffill"), dtype=float)
 
     for i in range(1, n):
         # final upper band
@@ -115,12 +130,11 @@ def supertrend(df, period=SUPER_PERIOD, multiplier=SUPER_MULT):
 
         st_value[i] = final_lower[i] if st_bool[i] else final_upper[i]
 
-    # attach results to dataframe
+    # attach results
     df["ST_bool"] = st_bool.tolist()
     df["ST_value"] = st_value.tolist()
     df["ATR"] = atr_series.values
     return df
-
 # ------------------- STRATEGY ENGINE -------------------
 
 def analyze():
