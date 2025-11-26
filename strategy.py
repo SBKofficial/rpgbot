@@ -34,61 +34,69 @@ OUTPUT_FILE = "strategy_summary.json"
 
 # ------------------- DATA FETCH -------------------
 
+# ---------- Robust helpers: atr, fetch_weekly, supertrend ----------
+
+def atr(df, period=14):
+    """
+    True Range / ATR calculation returning a pandas Series indexed like df.
+    Uses rolling mean for ATR (simple ATR). Defensive to NaNs.
+    """
+    # Ensure required cols exist
+    for col in ("High", "Low", "Close"):
+        if col not in df.columns:
+            raise ValueError(f"ATR: missing column '{col}' in dataframe.")
+    high = pd.to_numeric(df["High"], errors="coerce")
+    low = pd.to_numeric(df["Low"], errors="coerce")
+    close = pd.to_numeric(df["Close"], errors="coerce")
+
+    tr1 = high - low
+    tr2 = (high - close.shift(1)).abs()
+    tr3 = (low - close.shift(1)).abs()
+    tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+    atr_series = tr.rolling(window=period, min_periods=1).mean()
+    # Fill any edge NaNs defensively
+    atr_series = atr_series.fillna(method="bfill").fillna(method="ffill")
+    return atr_series
+
+
 def fetch_weekly(ticker):
     """
     Fetch weekly OHLCV using yfinance and return a clean DataFrame with columns:
-    ['Open','High','Low','Close','Volume'] (single-series per column).
-    Defends against MultiIndex columns, single-column quirks, and tries a fallback
-    using yf.Ticker(...).history(...) when needed.
+    ['Open','High','Low','Close','Volume'].
+    Includes a fallback to yf.Ticker(...).history when yf.download returns a single
+    column or MultiIndex.
     """
-    # Primary attempt using yf.download
+    # Primary attempt
     df = yf.download(tickers=ticker, period=DATA_PERIOD, interval="1wk", progress=False, auto_adjust=False)
 
-    # If result is empty -> error
     if df is None or df.empty:
         raise ValueError(f"No data returned by yfinance.download for ticker '{ticker}' (empty result).")
 
-    # If yfinance returned a MultiIndex (multiple tickers), try to select ticker block
+    # If MultiIndex columns (multiple tickers), try to select the block for the ticker
     if isinstance(df.columns, pd.MultiIndex):
-        # try to find ticker in top-level columns
+        # Prefer exact ticker match, else take first block
         top_levels = list(df.columns.levels[0])
         if ticker in top_levels:
             df = df[ticker]
         else:
-            # fall back to selecting the first top-level block
-            first_top = top_levels[0]
-            df = df[first_top]
+            df = df[top_levels[0]]
 
-    # If df has exactly one column and that column equals the ticker name (or not OHLCV),
-    # attempt fallback using yf.Ticker(...).history() which often returns full OHLCV.
+    # If df only has a single column (often a single-series where OHLCV missing),
+    # try the fallback yf.Ticker(...).history(...)
     if df.shape[1] == 1:
-        single_col = df.columns[0]
-        # try fallback
-        fb = None
         try:
-            tkr = yf.Ticker(ticker)
-            fb = tkr.history(period=DATA_PERIOD, interval="1wk", auto_adjust=False)
+            fb = yf.Ticker(ticker).history(period=DATA_PERIOD, interval="1wk", auto_adjust=False)
+            if fb is not None and not fb.empty:
+                df = fb.copy()
         except Exception:
-            fb = None
+            pass
 
-        if fb is not None and not fb.empty:
-            df = fb.copy()
-        else:
-            # If fallback failed, raise a helpful message containing observed columns
-            raise ValueError(
-                f"Ticker {ticker}: yfinance returned a single column {list(df.columns)}. "
-                "Fallback via yf.Ticker(...).history() also failed. "
-                "Possible causes: wrong ticker symbol for yfinance, or data not available for weekly OHLC. "
-                "Please verify the ticker name (for Indian ETFs use e.g. 'NIFTYBEES.NS', 'GOLDBEES.NS'). "
-                f"Observed columns: {list(df.columns)}"
-            )
-
-    # Normalize column names case-insensitively
+    # Normalize column names (case-insensitive)
     col_map = {c.lower(): c for c in df.columns}
     required = {"open", "high", "low", "close", "volume"}
     missing = required - set(col_map.keys())
 
-    # If 'Adj Close' present but 'Close' missing, use 'Adj Close' as Close
+    # Use 'adj close' if 'close' missing
     if missing and "adj close" in col_map and "close" not in col_map:
         col_map["close"] = col_map["adj close"]
         missing = required - set(col_map.keys())
@@ -97,55 +105,51 @@ def fetch_weekly(ticker):
         raise ValueError(
             f"Ticker {ticker}: missing required columns {missing} in fetched data. "
             f"Returned columns: {list(df.columns)}. "
-            "Suggestions: 1) confirm ticker string is correct for yfinance; "
-            "2) try an alternative ticker (for NSE index try '^NSEI' or use an ETF like 'NIFTYBEES.NS'); "
-            "3) run a quick local test: `import yfinance as yf; yf.Ticker('<ticker>').history(period='6mo', interval='1wk')`"
+            "Verify ticker symbol for yfinance (e.g., use 'NIFTYBEES.NS' for ETF)."
         )
 
-    # Build new clean DataFrame with canonical column names
+    # Build canonical DataFrame
     clean = pd.DataFrame(index=pd.to_datetime(df.index))
-    clean["Open"] = df[col_map["open"]]
-    clean["High"] = df[col_map["high"]]
-    clean["Low"] = df[col_map["low"]]
-    clean["Close"] = df[col_map["close"]]
-    clean["Volume"] = df[col_map["volume"]]
+    clean["Open"] = pd.to_numeric(df[col_map["open"]], errors="coerce")
+    clean["High"] = pd.to_numeric(df[col_map["high"]], errors="coerce")
+    clean["Low"] = pd.to_numeric(df[col_map["low"]], errors="coerce")
+    clean["Close"] = pd.to_numeric(df[col_map["close"]], errors="coerce")
+    clean["Volume"] = pd.to_numeric(df[col_map["volume"]], errors="coerce")
 
-    # Ensure numeric and drop rows with all-NaN closes
-    for c in ["Open", "High", "Low", "Close", "Volume"]:
-        clean[c] = pd.to_numeric(clean[c], errors="coerce")
-
+    # Drop rows without close and sort
     clean = clean.dropna(subset=["Close"], how="all")
     if clean.empty:
         raise ValueError(f"No valid OHLC rows for ticker {ticker} after cleaning.")
+    return clean.sort_index()
 
-    clean = clean.sort_index()
-    return clean
 
 def supertrend(df, period=SUPER_PERIOD, multiplier=SUPER_MULT):
     """
-    Robust Supertrend implementation operating on a cleaned DataFrame
-    that has single-series columns for Open/High/Low/Close/Volume.
-    Returns df with 'ST_bool', 'ST_value', 'ATR'.
+    Robust Supertrend implementation.
+    Input: cleaned DataFrame that contains numeric Open/High/Low/Close/Volume.
+    Output: same DataFrame with added columns:
+      - ST_bool (bool): True = bullish (green), False = bearish (red)
+      - ST_value (float): the current band value
+      - ATR (float)
     """
     df = df.copy()
     if len(df) < 2:
         raise ValueError("Not enough data to compute Supertrend (need >= 2 weekly bars).")
 
-    # ensure numeric series exist
-    for col in ["High", "Low", "Close"]:
+    # Ensure numeric
+    for col in ("High", "Low", "Close"):
         if col not in df.columns:
-            raise ValueError(f"Missing required column '{col}' in dataframe.")
+            raise ValueError(f"supertrend: missing required column '{col}'.")
         df[col] = pd.to_numeric(df[col], errors="coerce")
 
-    # ATR
+    # ATR series (aligned)
     atr_series = atr(df, period)
     atr_series = pd.to_numeric(atr_series, errors="coerce").fillna(method="bfill").fillna(method="ffill")
 
-    # HL2
     hl2 = ((df["High"] + df["Low"]) / 2.0).pipe(pd.to_numeric, errors="coerce").fillna(method="bfill").fillna(method="ffill")
 
-    basic_upper_pd = (hl2 + multiplier * atr_series)
-    basic_lower_pd = (hl2 - multiplier * atr_series)
+    basic_upper_pd = hl2 + multiplier * atr_series
+    basic_lower_pd = hl2 - multiplier * atr_series
 
     basic_upper = np.asarray(pd.to_numeric(basic_upper_pd, errors="coerce").fillna(method="bfill").fillna(method="ffill"), dtype=float)
     basic_lower = np.asarray(pd.to_numeric(basic_lower_pd, errors="coerce").fillna(method="bfill").fillna(method="ffill"), dtype=float)
@@ -164,6 +168,7 @@ def supertrend(df, period=SUPER_PERIOD, multiplier=SUPER_MULT):
     close_vals = np.asarray(pd.to_numeric(df["Close"], errors="coerce").fillna(method="bfill").fillna(method="ffill"), dtype=float)
 
     for i in range(1, n):
+        # compute final bands
         if (basic_upper[i] < final_upper[i-1]) or (close_vals[i-1] > final_upper[i-1]):
             final_upper[i] = basic_upper[i]
         else:
@@ -174,6 +179,7 @@ def supertrend(df, period=SUPER_PERIOD, multiplier=SUPER_MULT):
         else:
             final_lower[i] = final_lower[i-1]
 
+        # determine trend
         if st_bool[i-1] and (close_vals[i] <= final_upper[i]):
             st_bool[i] = False
         elif (not st_bool[i-1]) and (close_vals[i] >= final_lower[i]):
@@ -187,7 +193,6 @@ def supertrend(df, period=SUPER_PERIOD, multiplier=SUPER_MULT):
     df["ST_value"] = st_value.tolist()
     df["ATR"] = atr_series.values
     return df
-
 # ------------------- STRATEGY ENGINE -------------------
 
 def analyze():
