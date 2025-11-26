@@ -1,0 +1,29 @@
+name: weekly-etf-supertrend-check
+
+on:
+  schedule:
+    - cron: '0 0 * * SUN'
+  workflow_dispatch:
+
+jobs:
+  run-strategy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v4
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run strategy
+        run: python strategy.py
+
+      - name: Save output
+        uses: actions/upload-artifact@v4
+        with:
+          name: weekly-summary
+          path: strategy_summary.json
