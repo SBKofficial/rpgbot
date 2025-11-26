@@ -35,61 +35,86 @@ OUTPUT_FILE = "strategy_summary.json"
 # ------------------- DATA FETCH -------------------
 
 def fetch_weekly(ticker):
-    df = yf.download(
-        tickers=ticker,
-        period=DATA_PERIOD,
-        interval="1wk",
-        progress=False
-    )
+    """
+    Fetch weekly OHLCV using yfinance and return a clean DataFrame with columns:
+    ['Open','High','Low','Close','Volume'] (single-series per column).
+    Defends against MultiIndex columns and different casing.
+    """
+    df = yf.download(tickers=ticker, period=DATA_PERIOD, interval="1wk", progress=False, auto_adjust=False)
     if df is None or df.empty:
         raise ValueError(f"No data for ticker {ticker}")
-    df = df[["Open", "High", "Low", "Close", "Volume"]].copy()
-    df.index = pd.to_datetime(df.index)
-    return df.sort_index()
 
-# ------------------- SUPER TREND -------------------
+    # If yfinance returns MultiIndex columns (happens when multiple tickers passed),
+    # try to extract first ticker block.
+    if isinstance(df.columns, pd.MultiIndex):
+        # pick the first top-level label (usually the ticker)
+        top0 = df.columns.levels[0][0]
+        try:
+            df = df[top0]
+        except Exception:
+            # fallback: collapse the MultiIndex by taking the first level values
+            df.columns = ["_".join(map(str, c)).strip() for c in df.columns.values]
 
-def atr(df, period=14):
-    high = df["High"]
-    low = df["Low"]
-    close = df["Close"]
+    # Normalize column names case-insensitively
+    col_map = {c.lower(): c for c in df.columns}
+    required = {"open", "high", "low", "close", "volume"}
+    missing = required - set(col_map.keys())
+    if missing:
+        # try common alternate names (e.g., 'adj close')
+        # create mapping of lowercase names, check if any required close exists as 'adj close'
+        if "adj close" in col_map and "close" not in col_map:
+            col_map["close"] = col_map["adj close"]
+            missing = required - set(col_map.keys())
 
-    tr1 = high - low
-    tr2 = (high - close.shift(1)).abs()
-    tr3 = (low - close.shift(1)).abs()
-    tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+    if missing:
+        raise ValueError(f"Ticker {ticker}: missing required columns {missing} in fetched data. Columns: {list(df.columns)}")
 
-    return tr.rolling(period, min_periods=1).mean()
+    # Build new clean DataFrame with canonical column names
+    clean = pd.DataFrame(index=pd.to_datetime(df.index))
+    clean["Open"] = df[col_map["open"]]
+    clean["High"] = df[col_map["high"]]
+    clean["Low"] = df[col_map["low"]]
+    clean["Close"] = df[col_map["close"]]
+    clean["Volume"] = df[col_map["volume"]]
+
+    # Ensure numeric and drop rows with all-NaN closes
+    for c in ["Open", "High", "Low", "Close", "Volume"]:
+        clean[c] = pd.to_numeric(clean[c], errors="coerce")
+
+    clean = clean.dropna(subset=["Close"], how="all")
+    if clean.empty:
+        raise ValueError(f"No valid OHLC rows for ticker {ticker} after cleaning.")
+
+    clean = clean.sort_index()
+    return clean
+
 
 def supertrend(df, period=SUPER_PERIOD, multiplier=SUPER_MULT):
     """
-    Robust Supertrend implementation.
-    - Coerces all series to numeric scalars
-    - Fills NaNs defensively (backfill then forward fill)
-    - Uses numpy arrays for scalar comparisons
-    Returns dataframe with 'ST_bool', 'ST_value', and 'ATR'.
+    Robust Supertrend implementation operating on a cleaned DataFrame
+    that has single-series columns for Open/High/Low/Close/Volume.
+    Returns df with 'ST_bool', 'ST_value', 'ATR'.
     """
     df = df.copy()
     if len(df) < 2:
         raise ValueError("Not enough data to compute Supertrend (need >= 2 weekly bars).")
 
-    # ensure numeric columns
+    # ensure numeric series exist
     for col in ["High", "Low", "Close"]:
         if col not in df.columns:
             raise ValueError(f"Missing required column '{col}' in dataframe.")
         df[col] = pd.to_numeric(df[col], errors="coerce")
 
-    # compute ATR (returns pandas Series)
+    # ATR
     atr_series = atr(df, period)
     atr_series = pd.to_numeric(atr_series, errors="coerce").fillna(method="bfill").fillna(method="ffill")
 
+    # HL2
     hl2 = ((df["High"] + df["Low"]) / 2.0).pipe(pd.to_numeric, errors="coerce").fillna(method="bfill").fillna(method="ffill")
 
-    # compute basic bands as pandas Series then convert to float numpy arrays
     basic_upper_pd = (hl2 + multiplier * atr_series)
     basic_lower_pd = (hl2 - multiplier * atr_series)
 
-    # final conversion to numeric numpy arrays (force float dtype)
     basic_upper = np.asarray(pd.to_numeric(basic_upper_pd, errors="coerce").fillna(method="bfill").fillna(method="ffill"), dtype=float)
     basic_lower = np.asarray(pd.to_numeric(basic_lower_pd, errors="coerce").fillna(method="bfill").fillna(method="ffill"), dtype=float)
 
@@ -99,28 +124,24 @@ def supertrend(df, period=SUPER_PERIOD, multiplier=SUPER_MULT):
     st_bool = np.zeros(n, dtype=bool)
     st_value = np.zeros(n, dtype=float)
 
-    # initialize
     final_upper[0] = basic_upper[0]
     final_lower[0] = basic_lower[0]
-    st_bool[0] = True  # assume bullish start
+    st_bool[0] = True
     st_value[0] = final_lower[0]
 
     close_vals = np.asarray(pd.to_numeric(df["Close"], errors="coerce").fillna(method="bfill").fillna(method="ffill"), dtype=float)
 
     for i in range(1, n):
-        # final upper band
         if (basic_upper[i] < final_upper[i-1]) or (close_vals[i-1] > final_upper[i-1]):
             final_upper[i] = basic_upper[i]
         else:
             final_upper[i] = final_upper[i-1]
 
-        # final lower band
         if (basic_lower[i] > final_lower[i-1]) or (close_vals[i-1] < final_lower[i-1]):
             final_lower[i] = basic_lower[i]
         else:
             final_lower[i] = final_lower[i-1]
 
-        # determine trend
         if st_bool[i-1] and (close_vals[i] <= final_upper[i]):
             st_bool[i] = False
         elif (not st_bool[i-1]) and (close_vals[i] >= final_lower[i]):
@@ -130,11 +151,11 @@ def supertrend(df, period=SUPER_PERIOD, multiplier=SUPER_MULT):
 
         st_value[i] = final_lower[i] if st_bool[i] else final_upper[i]
 
-    # attach results
     df["ST_bool"] = st_bool.tolist()
     df["ST_value"] = st_value.tolist()
     df["ATR"] = atr_series.values
     return df
+
 # ------------------- STRATEGY ENGINE -------------------
 
 def analyze():
