@@ -38,36 +38,69 @@ def fetch_weekly(ticker):
     """
     Fetch weekly OHLCV using yfinance and return a clean DataFrame with columns:
     ['Open','High','Low','Close','Volume'] (single-series per column).
-    Defends against MultiIndex columns and different casing.
+    Defends against MultiIndex columns, single-column quirks, and tries a fallback
+    using yf.Ticker(...).history(...) when needed.
     """
+    # Primary attempt using yf.download
     df = yf.download(tickers=ticker, period=DATA_PERIOD, interval="1wk", progress=False, auto_adjust=False)
-    if df is None or df.empty:
-        raise ValueError(f"No data for ticker {ticker}")
 
-    # If yfinance returns MultiIndex columns (happens when multiple tickers passed),
-    # try to extract first ticker block.
+    # If result is empty -> error
+    if df is None or df.empty:
+        raise ValueError(f"No data returned by yfinance.download for ticker '{ticker}' (empty result).")
+
+    # If yfinance returned a MultiIndex (multiple tickers), try to select ticker block
     if isinstance(df.columns, pd.MultiIndex):
-        # pick the first top-level label (usually the ticker)
-        top0 = df.columns.levels[0][0]
+        # try to find ticker in top-level columns
+        top_levels = list(df.columns.levels[0])
+        if ticker in top_levels:
+            df = df[ticker]
+        else:
+            # fall back to selecting the first top-level block
+            first_top = top_levels[0]
+            df = df[first_top]
+
+    # If df has exactly one column and that column equals the ticker name (or not OHLCV),
+    # attempt fallback using yf.Ticker(...).history() which often returns full OHLCV.
+    if df.shape[1] == 1:
+        single_col = df.columns[0]
+        # try fallback
+        fb = None
         try:
-            df = df[top0]
+            tkr = yf.Ticker(ticker)
+            fb = tkr.history(period=DATA_PERIOD, interval="1wk", auto_adjust=False)
         except Exception:
-            # fallback: collapse the MultiIndex by taking the first level values
-            df.columns = ["_".join(map(str, c)).strip() for c in df.columns.values]
+            fb = None
+
+        if fb is not None and not fb.empty:
+            df = fb.copy()
+        else:
+            # If fallback failed, raise a helpful message containing observed columns
+            raise ValueError(
+                f"Ticker {ticker}: yfinance returned a single column {list(df.columns)}. "
+                "Fallback via yf.Ticker(...).history() also failed. "
+                "Possible causes: wrong ticker symbol for yfinance, or data not available for weekly OHLC. "
+                "Please verify the ticker name (for Indian ETFs use e.g. 'NIFTYBEES.NS', 'GOLDBEES.NS'). "
+                f"Observed columns: {list(df.columns)}"
+            )
 
     # Normalize column names case-insensitively
     col_map = {c.lower(): c for c in df.columns}
     required = {"open", "high", "low", "close", "volume"}
     missing = required - set(col_map.keys())
-    if missing:
-        # try common alternate names (e.g., 'adj close')
-        # create mapping of lowercase names, check if any required close exists as 'adj close'
-        if "adj close" in col_map and "close" not in col_map:
-            col_map["close"] = col_map["adj close"]
-            missing = required - set(col_map.keys())
+
+    # If 'Adj Close' present but 'Close' missing, use 'Adj Close' as Close
+    if missing and "adj close" in col_map and "close" not in col_map:
+        col_map["close"] = col_map["adj close"]
+        missing = required - set(col_map.keys())
 
     if missing:
-        raise ValueError(f"Ticker {ticker}: missing required columns {missing} in fetched data. Columns: {list(df.columns)}")
+        raise ValueError(
+            f"Ticker {ticker}: missing required columns {missing} in fetched data. "
+            f"Returned columns: {list(df.columns)}. "
+            "Suggestions: 1) confirm ticker string is correct for yfinance; "
+            "2) try an alternative ticker (for NSE index try '^NSEI' or use an ETF like 'NIFTYBEES.NS'); "
+            "3) run a quick local test: `import yfinance as yf; yf.Ticker('<ticker>').history(period='6mo', interval='1wk')`"
+        )
 
     # Build new clean DataFrame with canonical column names
     clean = pd.DataFrame(index=pd.to_datetime(df.index))
@@ -87,7 +120,6 @@ def fetch_weekly(ticker):
 
     clean = clean.sort_index()
     return clean
-
 
 def supertrend(df, period=SUPER_PERIOD, multiplier=SUPER_MULT):
     """
