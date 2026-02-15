@@ -33,34 +33,34 @@ async def post_init(app):
 
 # --- COMMAND: /start (The Detailed Manual) ---
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Notice the backslashes before the dots and dashes
     msg = (
         r"🤖 *Bot Lab Manager v14\.8*" + "\n"
         r"\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-" + "\n"
         r"🛰 *Core Navigation*" + "\n"
-        r"• `/status` — Open File Explorer to run/delete files\." + "\n"
-        r"• `/deployments` — View and manage active processes\." + "\n\n"
+        r"• `/status` — Open File Explorer\." + "\n"
+        r"• `/deployments` — Active processes\." + "\n\n"
         
         r"📂 *File Management*" + "\n"
-        r"• `/upload [name]` — Reply to a file/code to save it\. " + "\n"
-        r"  _Auto-detects \.py or \.js extensions from original file\._" + "\n\n"
+        r"• `/upload [name]` — Save code/files\." + "\n\n"
         
         r"▶️ *Process Control*" + "\n"
-        r"• `/run [slug] [cmd]` — Start a custom command\." + "\n"
-        r"  _Example: `/run nexus node waifu.js`_" + "\n"
-        r"• `/stop [slug]` — Kill a running process by its name\." + "\n"
-        r"• `/logs [slug]` — Get a snapshot of the latest output\." + "\n\n"
+        r"• `/run [slug] [cmd]` — Start a process\." + "\n"
+        r"• `/stop [slug]` — Kill a process\." + "\n"
+        r"• `/logs [slug]` — View output\." + "\n\n"
         
         r"⌨️ *Terminal Input*" + "\n"
-        r"• `/send [slug] [text]` — Send OTP or text to a process\." + "\n"
-        r"  _Example: `/send nexus 12345`_"
+        r"• `/send [slug] [text]` — Send OTP/Input\."
     )
     kb = [[InlineKeyboardButton("📂 Explorer", callback_data="status_refresh"),
            InlineKeyboardButton("🛰 Active Tasks", callback_data="view_deploys")]]
     
+    # We use MarkdownV2, so the 'r' strings and backslashes above are required
     if update.callback_query: 
         await update.callback_query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(kb), parse_mode="MarkdownV2")
     else: 
         await update.message.reply_text(msg, reply_markup=InlineKeyboardMarkup(kb), parse_mode="MarkdownV2")
+
 
 # --- UI & LOGIC HANDLERS ---
 async def status_cmd(update, context):
