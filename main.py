@@ -171,7 +171,7 @@ async def handle_callback(update, context):
 
 # --- Main Boot ---
 if __name__ == '__main__':
-    TOKEN = "YOUR_BOT_TOKEN_HERE"
+    TOKEN = "8341690614:AAFsv3JbPeD98gScm23lqiuobcjSLWCfMVA"
     app = ApplicationBuilder().token(TOKEN).post_init(post_init).build()
     
     # REGISTERING ALL 8 HANDLERS
