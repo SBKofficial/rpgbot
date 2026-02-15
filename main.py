@@ -5,7 +5,6 @@ from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandle
 # --- Configuration ---
 ROOT_DIR = os.path.abspath(".") 
 LAB_DIR = os.path.join(ROOT_DIR, "bot_lab")
-# Ensure the base bot_lab directory exists on startup
 if not os.path.exists(LAB_DIR):
     os.makedirs(LAB_DIR)
 
@@ -15,7 +14,6 @@ logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s', level=lo
 
 # --- Utilities ---
 def escape_md(text): 
-    # [span_2](start_span)Fixes the 'Can't parse entities' error[span_2](end_span)
     return re.sub(r'([_*\[\]()~`>#+\-=|{}.!])', r'\\\1', str(text))
 
 def get_user_base(uid): 
@@ -44,10 +42,10 @@ def sync_to_github(user_id, filename, action="Sync"):
         return True
     except Exception: return False
 
-# --- 1. /start (All Commands Explained) ---
+# --- 1. /start ---
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = (
-        r"🤖 *Bot Lab Manager v16\.1*" + "\n"
+        r"🤖 *Bot Lab Manager v16\.2*" + "\n"
         r"\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-" + "\n"
         r"📂 *File Management*" + "\n"
         r"• `/status` — Interactive Explorer\." + "\n"
@@ -94,7 +92,7 @@ async def deployments_cmd(update, context):
     if update.callback_query: await update.callback_query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(kb), parse_mode="MarkdownV2")
     else: await update.message.reply_text(msg, reply_markup=InlineKeyboardMarkup(kb), parse_mode="MarkdownV2")
 
-# --- 4. /upload ---
+# --- 4. /upload (Fixed Syntax) ---
 async def upload_cmd(update, context):
     uid, base = update.effective_user.id, get_user_base(update.effective_user.id)
     if not update.message.reply_to_message or not context.args:
@@ -109,7 +107,7 @@ async def upload_cmd(update, context):
     if replied.document:
         file_obj = await replied.document.get_file()
         out = io.BytesIO()
-        [span_3](start_span)await file_obj.download_to_memory(out=out) # Corrected[span_3](end_span)
+        await file_obj.download_to_memory(out=out)
         raw = out.getvalue().decode('utf-8')
     else: raw = replied.text
 
@@ -118,7 +116,7 @@ async def upload_cmd(update, context):
     m = await update.message.reply_text("💾 Saved... Syncing...")
     if sync_to_github(uid, filename, "Upload"): await m.edit_text(f"✅ `{escape_md(filename)}` pushed to GitHub!")
 
-# --- 5, 6, 7, 8, 9. Additional Commands ---
+# --- 5, 6, 7, 8, 9. Logic Group ---
 async def run_cmd(update, context):
     if len(context.args) < 2: return
     uid, pid, cmd = update.effective_user.id, f"{update.effective_user.id}_{context.args[0]}", " ".join(context.args[1:])
