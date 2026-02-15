@@ -112,20 +112,42 @@ async def send_cmd(update, context):
         running_processes[pid].stdin.write(text + "\n"); running_processes[pid].stdin.flush()
         await update.message.reply_text(fr"⌨️ Sent `{escape_md(text)}` to stdin\.")
 
-async def upload_cmd(update, context):
+async def upload_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid, base = update.effective_user.id, get_user_base(update.effective_user.id)
-    if not update.message.reply_to_message or not context.args: return
+    if not update.message.reply_to_message or not context.args: 
+        return await update.message.reply_text("❌ Reply to a file with: `/upload [name]`")
+    
     replied = update.message.reply_to_message
     input_name = context.args[0]
+    
+    # 1. Handle File Extension
     ext = "." + replied.document.file_name.split(".")[-1] if replied.document and "." in replied.document.file_name else ""
     filename = input_name + ext if "." not in input_name and ext else input_name
     target = os.path.join(base, filename)
-    raw = (await (await replied.document.get_file()).download_to_memory()).decode('utf-8') if replied.document else replied.text
+
+    # 2. FIXED: Download Logic
+    if replied.document:
+        try:
+            tg_file = await replied.document.get_file()
+            out = io.BytesIO() # Create the 'out' buffer the error asked for
+            await tg_file.download_to_memory(out=out) # Pass it here
+            raw = out.getvalue().decode('utf-8')
+        except Exception as e:
+            return await update.message.reply_text(f"❌ Download error: {str(e)}")
+    else:
+        raw = replied.text
+
+    # 3. Clean Backticks
     clean = raw.strip()
     if clean.startswith("```"):
-        lines = clean.split("\n"); clean = "\n".join(lines[1:-1]) if len(lines) > 2 else clean.replace("```", "")
-    with open(target, "w") as f: f.write(clean)
+        lines = clean.split("\n")
+        clean = "\n".join(lines[1:-1]) if len(lines) > 2 else clean.replace("```", "")
+
+    with open(target, "w") as f:
+        f.write(clean)
+    
     await update.message.reply_text(fr"✅ Saved as `{escape_md(filename)}`")
+
 
 # --- CALLBACK ROUTER ---
 async def handle_callback(update, context):
