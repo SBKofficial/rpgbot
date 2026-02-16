@@ -44,7 +44,7 @@ class LabEngine:
             "name": "my_bot",
             "start_cmd": "python3 main.py",
             "auto_deploy": True,
-            "env": {"BOT_TOKEN": "12345:ABCDE"}
+            "env": {"BOT_TOKEN": "YOUR_TOKEN_HERE"}
         }
 
     def connect_repo(self, uid, repo_url):
@@ -52,8 +52,9 @@ class LabEngine:
         branch_name = f"user_{uid}"
         if self.git_token and "github.com" in repo_url:
             repo_url = repo_url.replace("https://", f"https://{self.git_token}@")
+        
         try:
-            # Hard Clean to fix Status 128
+            # FIX: HARD CLEAN before cloning to prevent "destination path exists" error
             if os.path.exists(user_path):
                 for item in os.listdir(user_path):
                     if item == "venv": continue
@@ -63,11 +64,12 @@ class LabEngine:
             
             res = subprocess.run(["git", "clone", repo_url, "."], cwd=user_path, capture_output=True, text=True)
             if res.returncode != 0: return False, res.stderr
+            
             subprocess.run(["git", "checkout", "-b", branch_name], cwd=user_path, capture_output=True)
             return True, branch_name
         except Exception as e: return False, str(e)
 
-    def git_push(self, uid, msg="Bot Update"):
+    def git_push(self, uid, msg="Sync from Bot"):
         path = self.get_user_base(uid)
         branch = f"user_{uid}"
         try:
@@ -95,5 +97,5 @@ class LabEngine:
         branch = f"user_{uid}"
         try:
             subprocess.run(["git", "pull", "origin", branch], cwd=path, capture_output=True)
-            return True
-        except: return False
+            return True, "Success"
+        except Exception as e: return False, str(e)
