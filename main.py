@@ -51,7 +51,6 @@ async def start_configured_process(uid, config, context):
     log_p = os.path.join(user_path, f"{pid}.log")
 
     cmd = config['start_cmd'].replace("python3", exe)
-    # Using shell=True and PIPE for stdin support as requested
     proc = subprocess.Popen(cmd, shell=True, cwd=user_path, env={"PYTHONUNBUFFERED":"1"}, 
                             stdout=open(log_p, "w"), stderr=subprocess.STDOUT, 
                             stdin=subprocess.PIPE, text=True, bufsize=0)
@@ -82,7 +81,13 @@ async def start_cmd(update, context):
         r"• `/stop [slug]` — Kill a task\."
     )
     kb = [[InlineKeyboardButton("📂 Explorer", callback_data="status_refresh"), InlineKeyboardButton("🛰 Tasks", callback_data="view_deploys")]]
-    await update.message.reply_text(msg, reply_markup=InlineKeyboardMarkup(kb), parse_mode="MarkdownV2")
+    
+    # FIXED: Check if update.message exists (for direct command) or update.callback_query (for button click)
+    if update.callback_query:
+        try: await update.callback_query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(kb), parse_mode="MarkdownV2")
+        except: pass
+    else:
+        await update.message.reply_text(msg, reply_markup=InlineKeyboardMarkup(kb), parse_mode="MarkdownV2")
 
 async def connect_cmd(update, context):
     if not context.args: return await update.message.reply_text("❌ Usage: `/connect [url]`")
@@ -129,11 +134,14 @@ async def auto_cmd(update, context):
 async def status_cmd(update, context):
     uid, base = update.effective_user.id, engine.get_user_base(update.effective_user.id)
     files = [os.path.relpath(os.path.join(r, f), base) for r, d, fs in os.walk(base) if "venv" not in r and ".git" not in r for f in fs if not f.endswith(".log")]
-    # Ensure callback data doesn't exceed 64 chars
     kb = [[InlineKeyboardButton(f"📄 {f}", callback_data=f"manage_{f[:50]}")] for f in sorted(files)[:15]]
     kb.append([InlineKeyboardButton("🔄 Refresh", callback_data="status_refresh"), InlineKeyboardButton("🏠 Home", callback_data="nav_home")])
-    if update.callback_query: await update.callback_query.edit_message_text("📂 *Explorer*", reply_markup=InlineKeyboardMarkup(kb), parse_mode="MarkdownV2")
-    else: await update.message.reply_text("📂 *Explorer*", reply_markup=InlineKeyboardMarkup(kb), parse_mode="MarkdownV2")
+    
+    if update.callback_query: 
+        try: await update.callback_query.edit_message_text("📂 *Explorer*", reply_markup=InlineKeyboardMarkup(kb), parse_mode="MarkdownV2")
+        except: pass
+    else: 
+        await update.message.reply_text("📂 *Explorer*", reply_markup=InlineKeyboardMarkup(kb), parse_mode="MarkdownV2")
 
 async def search_cmd(update, context):
     if not context.args: return
@@ -153,7 +161,14 @@ async def stop_cmd(update, context):
 async def deployments_cmd(update, context):
     uid_prefix = f"{update.effective_user.id}_"
     active = [v['slug'] for k, v in running_processes.items() if k.startswith(uid_prefix)]
-    await update.message.reply_text("🛰 *Active Tasks:*\n" + "\n".join([f"✅ `{escape_md(p)}`" for p in active]) if active else "📭 No active tasks\.", parse_mode="MarkdownV2")
+    
+    msg = "🛰 *Active Tasks:*\n" + "\n".join([f"✅ `{escape_md(p)}`" for p in active]) if active else "📭 No active tasks\."
+    
+    if update.callback_query:
+        try: await update.callback_query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="nav_home")]]), parse_mode="MarkdownV2")
+        except: pass
+    else:
+        await update.message.reply_text(msg, parse_mode="MarkdownV2")
 
 async def logs_cmd(update, context):
     if not context.args: return
@@ -190,10 +205,11 @@ async def cb_handler(update, context):
               [InlineKeyboardButton("⬅️ Back", callback_data="status_refresh")]]
         await query.edit_message_text(f"📂 *Managing:* `{fname}`", reply_markup=InlineKeyboardMarkup(kb), parse_mode="MarkdownV2")
     elif data.startswith("vlogs_"):
-        # This handles viewing logs for specific files if they are scripts
         slug = data.replace("vlogs_", "").split(".")[0]
-        await query.edit_message_text(f"📄 *Logs:* \n{get_formatted_logs(uid, slug)}", 
-                                      reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="status_refresh")]]), parse_mode="MarkdownV2")
+        try:
+            await query.edit_message_text(f"📄 *Logs:* \n{get_formatted_logs(uid, slug)}", 
+                                          reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="status_refresh")]]), parse_mode="MarkdownV2")
+        except: pass
     elif data.startswith("vdel_"):
         fname = data.replace("vdel_", "")
         target = os.path.join(engine.get_user_base(uid), fname)
@@ -205,7 +221,6 @@ async def cb_handler(update, context):
 if __name__ == '__main__':
     app = ApplicationBuilder().token(BOT_TOKEN).build()
     
-    # 15 Registered Commands
     cmd_list = [
         ("start", start_cmd), ("connect", connect_cmd), ("run", run_cmd), ("upload", upload_cmd),
         ("sync", sync_cmd), ("auto", auto_cmd), ("status", status_cmd), ("search", search_cmd),
@@ -216,7 +231,7 @@ if __name__ == '__main__':
     
     app.add_handler(CallbackQueryHandler(cb_handler))
     
-    # Run the background auto-deploy watchdog
+    # Watchdog task
     asyncio.get_event_loop().create_task(watchdog(app))
     
     print("Bot Lab v21.0 - Full Commands Loaded")
