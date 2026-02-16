@@ -47,88 +47,83 @@ async def monitor_process(context, uid, pid, slug):
     logs = get_formatted_logs(uid, pid)
     await context.bot.send_message(uid, f"🏁 *Process Finished:* `{escape_md(slug)}`\n\n*Final Logs:*\n{logs}", parse_mode="MarkdownV2")
 
-# --- 1. /start (RESTORED FULL GUIDE) ---
+def start_unbuffered_proc(cmd, cwd, log_path):
+    env = os.environ.copy()
+    env["PYTHONUNBUFFERED"] = "1"
+    env["NODE_OPTIONS"] = "--unbuffered"
+    return subprocess.Popen(
+        cmd, shell=True, cwd=cwd, env=env,
+        stdout=open(log_path, "w"), stderr=subprocess.STDOUT, 
+        stdin=subprocess.PIPE, text=True, bufsize=0
+    )
+
+# --- 1. /start (Full Guide) ---
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = (
-        r"🤖 *Welcome to Bot Lab Manager v18\.6*" + "\n"
+        r"🤖 *Welcome to Bot Lab Manager v18\.8*" + "\n"
         r"Your personal cloud environment for running and managing bots\." + "\n\n"
         r"📂 *FILE MANAGEMENT*" + "\n"
-        r"• `/status` — Open the Explorer to view, run, or delete files\." + "\n"
-        r"• `/upload [name]` — Save code by replying to a text message or file\." + "\n"
-        r"• `/delete [name]` — Permanently remove a file from your lab\." + "\n"
-        r"• `/sync` — Manually push your current lab files to GitHub\." + "\n\n"
-        r"🛰 *PROCESS MONITORING*" + "\n"
-        r"• `/deployments` — List all currently running background tasks\." + "\n"
-        r"• `/logs [slug]` — View the latest output of a running process\." + "\n\n"
-        r"▶️ *EXECUTION CONTROL*" + "\n"
-        r"• `/run [slug] [cmd]` — Start a process \(e\.g\., `/run mybot python3 main\.py`\)\." + "\n"
-        r"• `/stop [slug]` — Force kill a running process\." + "\n"
-        r"• `/send [slug] [text]` — Send interactive input to a process's stdin\." + "\n\n"
-        r"💡 *Note:* When a process finishes, I will automatically send you the final logs\."
+        r"• `/status` — Open Explorer to run, delete, or install deps\." + "\n"
+        r"• `/upload [name]` — Save code by replying to a file/text\." + "\n"
+        r"• `/delete [name]` — Remove a file permanently\." + "\n"
+        r"• `/sync` — Push lab files to GitHub\." + "\n\n"
+        r"🛰 *MONITORING*" + "\n"
+        r"• `/deployments` — List active background tasks\." + "\n"
+        r"• `/logs [slug]` — View output of a running process\." + "\n\n"
+        r"▶️ *PROCESS CONTROL*" + "\n"
+        r"• `/run [slug] [cmd]` — Start a process manually\." + "\n"
+        r"• `/stop [slug]` — Kill a running process\." + "\n"
+        r"• `/send [slug] [text]` — Send interactive input to stdin\."
     )
     kb = [[InlineKeyboardButton("📂 Explorer", callback_data="status_refresh"),
            InlineKeyboardButton("🛰 Tasks", callback_data="view_deploys")]]
-    
-    if update.callback_query:
-        try: await update.callback_query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(kb), parse_mode="MarkdownV2")
-        except: pass
+    if update.callback_query: await update.callback_query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(kb), parse_mode="MarkdownV2")
     else: await update.message.reply_text(msg, reply_markup=InlineKeyboardMarkup(kb), parse_mode="MarkdownV2")
 
-# --- 2. /status & 3. /deployments ---
-async def status_cmd(update, context):
-    uid = update.effective_user.id
-    base = get_user_base(uid)
-    files = sorted(os.listdir(base))
-    kb = [[InlineKeyboardButton(f"📄 {f}", callback_data=f"manage_{f}")] for f in files if not f.endswith(".log") and f != ".git"]
-    kb.append([InlineKeyboardButton("🔄 Refresh", callback_data="status_refresh"), InlineKeyboardButton("🏠 Home", callback_data="nav_home")])
-    text = f"📂 *Explorer*"
-    if update.callback_query:
-        try: await update.callback_query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(kb), parse_mode="MarkdownV2")
-        except: pass
-    else: await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(kb), parse_mode="MarkdownV2")
-
-async def deployments_cmd(update, context):
-    uid, prefix = update.effective_user.id, f"{update.effective_user.id}_"
-    procs = [n.replace(prefix, "") for n in running_processes if n.startswith(prefix)]
-    msg = "🛰 *Active Tasks:*\n" + "\n".join([f"✅ `{escape_md(p)}`" for p in procs]) if procs else r"📭 No active tasks\."
-    kb = [[InlineKeyboardButton("🔄 Refresh", callback_data="view_deploys"), InlineKeyboardButton("🏠 Home", callback_data="nav_home")]]
-    if update.callback_query:
-        try: await update.callback_query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(kb), parse_mode="MarkdownV2")
-        except: pass
-    else: await update.message.reply_text(msg, reply_markup=InlineKeyboardMarkup(kb), parse_mode="MarkdownV2")
-
-# --- UI Callback Logic (Verified Refresh/Stop Buttons) ---
+# --- UI Callback Logic ---
 async def handle_callback(update, context):
     query = update.callback_query; uid, data = query.from_user.id, query.data
     await query.answer()
 
-    if data == "status_refresh": await status_cmd(update, context)
-    elif data == "nav_home": await start_cmd(update, context)
-    elif data == "view_deploys": await deployments_cmd(update, context)
+    if data == "status_refresh": 
+        base = get_user_base(uid)
+        files = sorted(os.listdir(base))
+        kb = [[InlineKeyboardButton(f"📄 {f}", callback_data=f"manage_{f}")] for f in files if not f.endswith(".log") and f != ".git"]
+        kb.append([InlineKeyboardButton("🔄 Refresh", callback_data="status_refresh"), InlineKeyboardButton("🏠 Home", callback_data="nav_home")])
+        await query.edit_message_text("📂 *Explorer*", reply_markup=InlineKeyboardMarkup(kb), parse_mode="MarkdownV2")
     
+    elif data == "nav_home": await start_cmd(update, context)
+    elif data == "view_deploys":
+        prefix = f"{uid}_"
+        procs = [n.replace(prefix, "") for n in running_processes if n.startswith(prefix)]
+        msg = "🛰 *Active Tasks:*\n" + "\n".join([f"✅ `{escape_md(p)}`" for p in procs]) if procs else r"📭 No active tasks\."
+        await query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔄 Refresh", callback_data="view_deploys"), InlineKeyboardButton("🏠 Home", callback_data="nav_home")]]), parse_mode="MarkdownV2")
+
     elif data.startswith("manage_"):
         f = data.replace("manage_", ""); pid = f"{uid}_{f}"
         kb = [[InlineKeyboardButton("▶️ Run", callback_data=f"qrun_{f}"), InlineKeyboardButton("📄 Logs", callback_data=f"showlogs_{pid}")]]
-        if "requirements" in f.lower(): kb.append([InlineKeyboardButton("📦 Install Deps", callback_data=f"pipinst_{f}")])
+        if "requirements.txt" in f: kb.append([InlineKeyboardButton("📦 Install Py Deps", callback_data=f"pipinst_{f}")])
+        if "package.json" in f: kb.append([InlineKeyboardButton("📦 Install Node Deps", callback_data=f"npminst_{f}")])
         kb.append([InlineKeyboardButton("🗑 Delete", callback_data=f"uidelete_{f}"), InlineKeyboardButton("⬅️ Back", callback_data="status_refresh")])
         await query.edit_message_text(f"📄 *File:* `{escape_md(f)}`", reply_markup=InlineKeyboardMarkup(kb), parse_mode="MarkdownV2")
 
-    elif data.startswith("qrun_") or data.startswith("pipinst_"):
-        is_pip = data.startswith("pipinst_")
-        f = data.replace("qrun_", "").replace("pipinst_", "")
-        pid = f"{uid}_pip_install" if is_pip else f"{uid}_{f}"
-        cmd = f"pip install -r {f}" if is_pip else (f"node {f}" if f.endswith(".js") else f"python3 -u {f}")
+    elif any(data.startswith(x) for x in ["qrun_", "pipinst_", "npminst_"]):
+        mode = "RUN"
+        if "pipinst_" in data: mode, f = "PIP", data.replace("pipinst_", "")
+        elif "npminst_" in data: mode, f = "NPM", data.replace("npminst_", "")
+        else: f = data.replace("qrun_", "")
+        
+        pid = f"{uid}_{mode}_{f}"
+        cmd = f"pip install -r {f}" if mode == "PIP" else ("npm install" if mode == "NPM" else (f"node {f}" if f.endswith(".js") else f"python3 -u {f}"))
         log_p = os.path.join(get_user_base(uid), f"{pid}.log")
-        running_processes[pid] = subprocess.Popen(cmd, shell=True, cwd=get_user_base(uid), stdout=open(log_p, "w"), stderr=subprocess.STDOUT, stdin=subprocess.PIPE, text=True, bufsize=0)
+        running_processes[pid] = start_unbuffered_proc(cmd, get_user_base(uid), log_p)
         asyncio.create_task(monitor_process(context, uid, pid, f))
         await asyncio.sleep(1)
-        # VERIFIED: Refresh and Stop buttons added
         kb = [[InlineKeyboardButton("🔄 Refresh", callback_data=f"showlogs_{pid}"), InlineKeyboardButton("🛑 Stop", callback_data=f"kill_{pid}")], [InlineKeyboardButton("⬅️ Back", callback_data="status_refresh")]]
-        await query.edit_message_text(f"🚀 *Started:* `{escape_md(f)}` \n\n{get_formatted_logs(uid, pid)}", reply_markup=InlineKeyboardMarkup(kb), parse_mode="MarkdownV2")
+        await query.edit_message_text(f"🚀 *Started {mode}:* `{escape_md(f)}` \n\n{get_formatted_logs(uid, pid)}", reply_markup=InlineKeyboardMarkup(kb), parse_mode="MarkdownV2")
 
     elif data.startswith("showlogs_"):
         pid = data.replace("showlogs_", "")
-        # VERIFIED: Refresh and Stop buttons added
         kb = [[InlineKeyboardButton("🔄 Refresh", callback_data=f"showlogs_{pid}"), InlineKeyboardButton("🛑 Stop", callback_data=f"kill_{pid}")], [InlineKeyboardButton("⬅️ Back", callback_data="status_refresh")]]
         try: await query.edit_message_text(f"📄 *Logs:* \n{get_formatted_logs(uid, pid)}", reply_markup=InlineKeyboardMarkup(kb), parse_mode="MarkdownV2")
         except: pass
@@ -143,23 +138,16 @@ async def handle_callback(update, context):
         if os.path.exists(target): os.remove(target)
         await query.edit_message_text(f"🗑 Deleted `{escape_md(f)}`", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="status_refresh")]]))
 
-# --- Remaining Functions ---
-async def run_cmd(update, context):
-    if len(context.args) < 2: return
-    uid, slug = update.effective_user.id, context.args[0]
-    pid, cmd = f"{uid}_{slug}", " ".join(context.args[1:])
-    log_p = os.path.join(get_user_base(uid), f"{pid}.log")
-    running_processes[pid] = subprocess.Popen(cmd, shell=True, cwd=get_user_base(uid), stdout=open(log_p, "w"), stderr=subprocess.STDOUT, stdin=subprocess.PIPE, text=True, bufsize=0)
-    asyncio.create_task(monitor_process(context, uid, pid, slug))
-    await asyncio.sleep(1)
-    kb = [[InlineKeyboardButton("🔄 Refresh", callback_data=f"showlogs_{pid}"), InlineKeyboardButton("🛑 Stop", callback_data=f"kill_{pid}")]]
-    await update.message.reply_text(f"🚀 *Started:* `{escape_md(slug)}` \n\n{get_formatted_logs(uid, pid)}", reply_markup=InlineKeyboardMarkup(kb), parse_mode="MarkdownV2")
-
+# --- Core Commands ---
 async def upload_cmd(update, context):
     uid, base = update.effective_user.id, get_user_base(update.effective_user.id)
     if not update.message.reply_to_message or not context.args: return
     replied = update.message.reply_to_message; filename = context.args[0]; target = os.path.join(base, filename)
-    content = replied.text if replied.text else (await (await replied.document.get_file()).download_as_bytearray()).decode('utf-8')
+    if replied.document:
+        f_obj = await replied.document.get_file()
+        content = (await f_obj.download_as_bytearray()).decode('utf-8')
+    elif replied.text: content = replied.text
+    else: return
     with open(target, "w") as f: f.write(content.strip())
     res = run_git_push(f"Upload {filename}")
     await update.message.reply_text(f"✅ `{escape_md(filename)}` pushed!" if res.returncode == 0 else "⚠️ Saved locally.")
@@ -167,34 +155,30 @@ async def upload_cmd(update, context):
 async def send_cmd(update, context):
     if len(context.args) < 2: return
     pid = f"{update.effective_user.id}_{context.args[0]}"
-    if pid in running_processes:
-        running_processes[pid].stdin.write(" ".join(context.args[1:]) + "\n")
-        running_processes[pid].stdin.flush()
+    # Search for pid matches if mode prefix exists
+    target_pid = next((p for p in running_processes if p.endswith(f"_{context.args[0]}")), pid)
+    if target_pid in running_processes:
+        running_processes[target_pid].stdin.write(" ".join(context.args[1:]) + "\n")
+        running_processes[target_pid].stdin.flush()
         await update.message.reply_text("⌨️ Sent to stdin.")
 
-async def logs_cmd(update, context):
-    if not context.args: return
-    uid, pid = update.effective_user.id, f"{update.effective_user.id}_{context.args[0]}"
-    kb = [[InlineKeyboardButton("🔄 Refresh", callback_data=f"showlogs_{pid}"), InlineKeyboardButton("🛑 Stop", callback_data=f"kill_{pid}")]]
-    await update.message.reply_text(f"📄 *Logs:* \n{get_formatted_logs(uid, pid)}", reply_markup=InlineKeyboardMarkup(kb), parse_mode="MarkdownV2")
-
 async def sync_cmd(update, context):
-    res = run_git_push("Sync"); await update.message.reply_text("✅ Sync OK" if res.returncode == 0 else "❌ Failed")
+    res = run_git_push("Manual Sync"); await update.message.reply_text("✅ Sync OK" if res.returncode == 0 else "❌ Failed")
 
-async def delete_cmd(update, context):
-    if not context.args: return
-    target = os.path.join(get_user_base(update.effective_user.id), context.args[0])
-    if os.path.exists(target): os.remove(target); await update.message.reply_text("🗑 Deleted.")
-
-async def stop_cmd(update, context):
-    if not context.args: return
-    pid = f"{update.effective_user.id}_{context.args[0]}"
-    if pid in running_processes: running_processes[pid].terminate(); await update.message.reply_text("🛑 Stopped.")
+async def run_cmd(update, context):
+    if len(context.args) < 2: return
+    uid, slug = update.effective_user.id, context.args[0]
+    pid, cmd = f"{uid}_{slug}", " ".join(context.args[1:])
+    log_p = os.path.join(get_user_base(uid), f"{pid}.log")
+    running_processes[pid] = start_unbuffered_proc(cmd, get_user_base(uid), log_p)
+    asyncio.create_task(monitor_process(context, uid, pid, slug))
+    await asyncio.sleep(1)
+    kb = [[InlineKeyboardButton("🔄 Refresh", callback_data=f"showlogs_{pid}"), InlineKeyboardButton("🛑 Stop", callback_data=f"kill_{pid}")]]
+    await update.message.reply_text(f"🚀 *Started:* `{escape_md(slug)}` \n\n{get_formatted_logs(uid, pid)}", reply_markup=InlineKeyboardMarkup(kb), parse_mode="MarkdownV2")
 
 if __name__ == '__main__':
     app = ApplicationBuilder().token(os.getenv("BOT_TOKEN")).build()
-    handlers = [("start", start_cmd), ("upload", upload_cmd), ("status", status_cmd), ("deployments", deployments_cmd), 
-                ("delete", delete_cmd), ("run", run_cmd), ("stop", stop_cmd), ("logs", logs_cmd), ("send", send_cmd), ("sync", sync_cmd)]
-    for n, f in handlers: app.add_handler(CommandHandler(n, f))
+    cmds = [("start", start_cmd), ("upload", upload_cmd), ("run", run_cmd), ("send", send_cmd), ("sync", sync_cmd), ("status", start_cmd), ("deployments", start_cmd)]
+    for n, f in cmds: app.add_handler(CommandHandler(n, f))
     app.add_handler(CallbackQueryHandler(handle_callback))
     app.run_polling()
