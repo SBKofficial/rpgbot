@@ -33,24 +33,23 @@ def get_formatted_logs(uid, pid):
     except: return r"❌ _Error reading logs\._"
 
 def run_git_push(uid, commit_msg):
-    # Get the specific user's folder path
     user_path = get_user_base(uid)
     
-    # Run Git commands ONLY inside that user's directory
+    # Check if the folder is actually a Git repository
+    if not os.path.exists(os.path.join(user_path, ".git")):
+        # Return a mock process object so it doesn't crash the bot
+        return subprocess.CompletedProcess(args=[], returncode=1, stderr=b"No git repo initialized")
+
     try:
         subprocess.run('git config user.email "bot@lab.com"', shell=True, cwd=user_path)
         subprocess.run('git config user.name "BotLabManager"', shell=True, cwd=user_path)
-        
-        # Check if it's actually a git repo before pushing
-        if not os.path.exists(os.path.join(user_path, ".git")):
-            return subprocess.CompletedProcess(args=[], returncode=1, stderr="Not a git repo")
-
         subprocess.run("git add .", shell=True, cwd=user_path)
         subprocess.run(f"git commit -m '{commit_msg}'", shell=True, cwd=user_path)
-        return subprocess.run(f"git push {REPO_URL} main", shell=True, capture_output=True, text=True, cwd=user_path)
+        return subprocess.run(f"git push {REPO_URL} main", shell=True, capture_output=True, cwd=user_path)
     except Exception as e:
         logging.error(f"Git Error for {uid}: {e}")
-        return subprocess.CompletedProcess(args=[], returncode=1)
+        return subprocess.CompletedProcess(args=[], returncode=1, stderr=str(e).encode())
+
 
 async def upload_cmd(update, context):
     user = update.effective_user
