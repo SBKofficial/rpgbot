@@ -208,7 +208,15 @@ async def send_cmd(update, context):
         await update.message.reply_text("⌨️ Sent to stdin.")
 
 async def sync_cmd(update, context):
-    res = run_git_push("Manual Sync"); await update.message.reply_text("✅ Sync OK" if res.returncode == 0 else "❌ Failed")
+    uid = update.effective_user.id
+    # Added the 'uid' argument to match the new function signature
+    res = run_git_push(uid, "Manual Sync") 
+    
+    if res.returncode == 0:
+        await update.message.reply_text("✅ Sync OK")
+    else:
+        await update.message.reply_text(f"❌ Failed: {res.stderr.decode() if res.stderr else 'No repo'}")
+
 
 async def run_cmd(update, context):
     if len(context.args) < 2: return
