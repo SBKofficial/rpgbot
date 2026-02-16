@@ -20,6 +20,7 @@ class LabEngine:
         req_path = os.path.join(user_path, "requirements.txt")
         if os.path.exists(req_path):
             exe = os.path.join(venv_path, "bin", "python3")
+            subprocess.run([exe, "-m", "pip", "install", "--upgrade", "pip"], check=True)
             subprocess.run([exe, "-m", "pip", "install", "-r", req_path], check=True)
         return venv_path
 
@@ -54,7 +55,7 @@ class LabEngine:
             repo_url = repo_url.replace("https://", f"https://{self.git_token}@")
         
         try:
-            # FIX: HARD CLEAN before cloning to prevent "destination path exists" error
+            # AGGRESSIVE CLEAN: Ensure directory is ready for clone
             if os.path.exists(user_path):
                 for item in os.listdir(user_path):
                     if item == "venv": continue
@@ -62,6 +63,7 @@ class LabEngine:
                     if os.path.isdir(p): shutil.rmtree(p)
                     else: os.remove(p)
             
+            # Resetting git state
             res = subprocess.run(["git", "clone", repo_url, "."], cwd=user_path, capture_output=True, text=True)
             if res.returncode != 0: return False, res.stderr
             
