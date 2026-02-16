@@ -32,12 +32,61 @@ def get_formatted_logs(uid, pid):
             return "\n".join([f"> {escape_md(line.strip())}" for line in lines])
     except: return r"❌ _Error reading logs\._"
 
-def run_git_push(commit_msg):
-    subprocess.run('git config user.email "bot@lab.com"', shell=True, cwd=ROOT_DIR)
-    subprocess.run('git config user.name "BotLabManager"', shell=True, cwd=ROOT_DIR)
-    subprocess.run("git add .", shell=True, cwd=ROOT_DIR)
-    subprocess.run(f"git commit -m '{commit_msg}'", shell=True, cwd=ROOT_DIR)
-    return subprocess.run(f"git push {REPO_URL} main", shell=True, capture_output=True, text=True, cwd=ROOT_DIR)
+def run_git_push(uid, commit_msg):
+    # Get the specific user's folder path
+    user_path = get_user_base(uid)
+    
+    # Run Git commands ONLY inside that user's directory
+    try:
+        subprocess.run('git config user.email "bot@lab.com"', shell=True, cwd=user_path)
+        subprocess.run('git config user.name "BotLabManager"', shell=True, cwd=user_path)
+        
+        # Check if it's actually a git repo before pushing
+        if not os.path.exists(os.path.join(user_path, ".git")):
+            return subprocess.CompletedProcess(args=[], returncode=1, stderr="Not a git repo")
+
+        subprocess.run("git add .", shell=True, cwd=user_path)
+        subprocess.run(f"git commit -m '{commit_msg}'", shell=True, cwd=user_path)
+        return subprocess.run(f"git push {REPO_URL} main", shell=True, capture_output=True, text=True, cwd=user_path)
+    except Exception as e:
+        logging.error(f"Git Error for {uid}: {e}")
+        return subprocess.CompletedProcess(args=[], returncode=1)
+
+async def upload_cmd(update, context):
+    user = update.effective_user
+    uid = user.id
+    base = get_user_base(uid) # This ensures the folder exists
+    
+    if not update.message.reply_to_message or not context.args: 
+        return await update.message.reply_text("❌ Reply to a code message/file with `/upload filename.py`")
+
+    replied = update.message.reply_to_message
+    filename = context.args[0]
+    target = os.path.join(base, filename)
+
+    try:
+        if replied.document:
+            f_obj = await replied.document.get_file()
+            content = (await f_obj.download_as_bytearray()).decode('utf-8')
+        elif replied.text:
+            content = replied.text
+        else:
+            return await update.message.reply_text("❌ No text or document detected.")
+
+        with open(target, "w") as f:
+            f.write(content.strip())
+        
+        # Pass UID to the push function
+        res = run_git_push(uid, f"Upload {filename} by {user.first_name}")
+        
+        if res.returncode == 0:
+            await update.message.reply_text(f"✅ `{escape_md(filename)}` uploaded and synced to GitHub\.")
+        else:
+            await update.message.reply_text(f"⚠️ `{escape_md(filename)}` saved locally in your lab, but sync failed \(GitHub error or no repo\)\.")
+            
+    except Exception as e:
+        await update.message.reply_text(f"❌ Error during upload: `{escape_md(str(e))}`")
+
 
 async def monitor_process(context, uid, pid, slug):
     proc = running_processes.get(pid)
@@ -148,19 +197,6 @@ async def handle_callback(update, context):
         await query.edit_message_text(f"🗑 Deleted `{escape_md(f)}`", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="status_refresh")]]))
 
 # --- Core Commands ---
-async def upload_cmd(update, context):
-    uid, base = update.effective_user.id, get_user_base(uid)
-    if not update.message.reply_to_message or not context.args: return
-    replied = update.message.reply_to_message; filename = context.args[0]; target = os.path.join(base, filename)
-    if replied.document:
-        f_obj = await replied.document.get_file()
-        content = (await f_obj.download_as_bytearray()).decode('utf-8')
-    elif replied.text: content = replied.text
-    else: return
-    with open(target, "w") as f: f.write(content.strip())
-    res = run_git_push(f"Upload {filename}")
-    await update.message.reply_text(f"✅ `{escape_md(filename)}` pushed!" if res.returncode == 0 else "⚠️ Saved locally.")
-
 async def send_cmd(update, context):
     if len(context.args) < 2: return
     uid, slug = update.effective_user.id, context.args[0]
