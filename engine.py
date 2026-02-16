@@ -29,6 +29,11 @@ class LabEngine:
         except: return None
         return None
 
+    def save_config(self, uid, config):
+        path = os.path.join(self.get_user_base(uid), "bot.json")
+        with open(path, "w") as f:
+            json.dump(config, f, indent=4)
+
     def get_config_template(self):
         return {
             "name": "my-bot",
@@ -44,13 +49,28 @@ class LabEngine:
         try:
             for item in os.listdir(user_path):
                 if item != "venv":
-                    path = os.path.join(user_path, item)
-                    shutil.rmtree(path) if os.path.isdir(path) else os.remove(path)
+                    p = os.path.join(user_path, item)
+                    shutil.rmtree(p) if os.path.isdir(p) else os.remove(p)
             subprocess.run(["git", "clone", repo_url, "."], cwd=user_path, check=True)
             subprocess.run(["git", "checkout", "-b", branch_name], cwd=user_path, capture_output=True)
             return True, branch_name
         except Exception as e:
             return False, str(e)
+
+    def git_push(self, uid, msg):
+        path = self.get_user_base(uid)
+        branch = f"user_{uid}"
+        try:
+            subprocess.run('git config user.email "bot@lab.com"', shell=True, cwd=path)
+            subprocess.run('git config user.name "BotLabManager"', shell=True, cwd=path)
+            subprocess.run("git add .", shell=True, cwd=path)
+            # Check if there are changes to commit
+            check = subprocess.run("git status --porcelain", shell=True, cwd=path, capture_output=True, text=True)
+            if not check.stdout.strip(): return True
+            subprocess.run(f'git commit -m "{msg}"', shell=True, cwd=path)
+            res = subprocess.run(f"git push origin {branch}", shell=True, cwd=path, capture_output=True)
+            return res.returncode == 0
+        except: return False
 
     def git_poll_update(self, uid):
         path = self.get_user_base(uid)
@@ -71,6 +91,3 @@ class LabEngine:
             subprocess.run(["git", "pull", "origin", branch], cwd=path, capture_output=True)
             return True, old_hash
         except: return False, None
-
-    def rollback(self, uid, target_hash):
-        subprocess.run(["git", "reset", "--hard", target_hash], cwd=self.get_user_base(uid))
