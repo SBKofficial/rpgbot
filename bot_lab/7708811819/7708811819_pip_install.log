@@ -1,0 +1,35 @@
+Defaulting to user installation because normal site-packages is not writeable
+Collecting dotenv (from -r requirements.txt (line 1))
+  Downloading dotenv-0.9.9-py2.py3-none-any.whl.metadata (279 bytes)
+Collecting dnspython (from -r requirements.txt (line 2))
+  Downloading dnspython-2.8.0-py3-none-any.whl.metadata (5.7 kB)
+Collecting pymongo (from -r requirements.txt (line 4))
+  Downloading pymongo-4.16.0-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl.metadata (10.0 kB)
+Requirement already satisfied: python-telegram-bot[job-queue] in /home/newuser/.local/lib/python3.11/site-packages (from -r requirements.txt (line 3)) (22.6)
+Collecting python-dotenv (from dotenv->-r requirements.txt (line 1))
+  Downloading python_dotenv-1.2.1-py3-none-any.whl.metadata (25 kB)
+Requirement already satisfied: httpx<0.29,>=0.27 in /home/newuser/.local/lib/python3.11/site-packages (from python-telegram-bot[job-queue]->-r requirements.txt (line 3)) (0.28.1)
+Collecting apscheduler<3.12.0,>=3.10.4 (from python-telegram-bot[job-queue]->-r requirements.txt (line 3))
+  Downloading apscheduler-3.11.2-py3-none-any.whl.metadata (6.4 kB)
+Collecting tzlocal>=3.0 (from apscheduler<3.12.0,>=3.10.4->python-telegram-bot[job-queue]->-r requirements.txt (line 3))
+  Downloading tzlocal-5.3.1-py3-none-any.whl.metadata (7.6 kB)
+Requirement already satisfied: anyio in /home/newuser/.local/lib/python3.11/site-packages (from httpx<0.29,>=0.27->python-telegram-bot[job-queue]->-r requirements.txt (line 3)) (4.12.1)
+Requirement already satisfied: certifi in /home/newuser/.local/lib/python3.11/site-packages (from httpx<0.29,>=0.27->python-telegram-bot[job-queue]->-r requirements.txt (line 3)) (2026.1.4)
+Requirement already satisfied: httpcore==1.* in /home/newuser/.local/lib/python3.11/site-packages (from httpx<0.29,>=0.27->python-telegram-bot[job-queue]->-r requirements.txt (line 3)) (1.0.9)
+Requirement already satisfied: idna in /home/newuser/.local/lib/python3.11/site-packages (from httpx<0.29,>=0.27->python-telegram-bot[job-queue]->-r requirements.txt (line 3)) (3.11)
+Requirement already satisfied: h11>=0.16 in /home/newuser/.local/lib/python3.11/site-packages (from httpcore==1.*->httpx<0.29,>=0.27->python-telegram-bot[job-queue]->-r requirements.txt (line 3)) (0.16.0)
+Requirement already satisfied: typing_extensions>=4.5 in /home/newuser/.local/lib/python3.11/site-packages (from anyio->httpx<0.29,>=0.27->python-telegram-bot[job-queue]->-r requirements.txt (line 3)) (4.15.0)
+Downloading dotenv-0.9.9-py2.py3-none-any.whl (1.9 kB)
+Downloading dnspython-2.8.0-py3-none-any.whl (331 kB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 331.1/331.1 kB 15.1 MB/s eta 0:00:00
+Downloading pymongo-4.16.0-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl (1.4 MB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 1.4/1.4 MB 19.8 MB/s eta 0:00:00
+Downloading apscheduler-3.11.2-py3-none-any.whl (64 kB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 64.4/64.4 kB 3.1 MB/s eta 0:00:00
+Downloading python_dotenv-1.2.1-py3-none-any.whl (21 kB)
+Downloading tzlocal-5.3.1-py3-none-any.whl (18 kB)
+Installing collected packages: tzlocal, python-dotenv, dnspython, pymongo, dotenv, apscheduler
+Successfully installed apscheduler-3.11.2 dnspython-2.8.0 dotenv-0.9.9 pymongo-4.16.0 python-dotenv-1.2.1 tzlocal-5.3.1
+
+[notice] A new release of pip is available: 24.0 -> 26.0.1
+[notice] To update, run: pip install --upgrade pip
