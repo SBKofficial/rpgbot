@@ -26,20 +26,21 @@ def get_formatted_logs(uid, slug):
 # --- Watchdog for Auto-Deploy ---
 async def watchdog(context: ContextTypes.DEFAULT_TYPE):
     while True:
-        for uid_folder in os.listdir(engine.root_dir):
-            if not uid_folder.isdigit(): continue
-            uid = int(uid_folder)
-            if engine.git_poll_update(uid):
-                config = engine.read_config(uid)
-                if config and config.get("auto_deploy"):
-                    await context.bot.send_message(uid, "🛰 *Auto\-Deploy:* Update detected\. Pulling\.\.\.", parse_mode="MarkdownV2")
-                    # Stop existing
-                    pid = next((p for p in running_processes if p.startswith(f"{uid}_")), None)
-                    if pid:
-                        running_processes[pid]['proc'].terminate()
-                        del running_processes[pid]
-                    success, old_hash = engine.deploy_pull(uid)
-                    if success: await start_configured_process(uid, config, context)
+        try:
+            for uid_folder in os.listdir(engine.root_dir):
+                if not uid_folder.isdigit(): continue
+                uid = int(uid_folder)
+                if engine.git_poll_update(uid):
+                    config = engine.read_config(uid)
+                    if config and config.get("auto_deploy"):
+                        await context.bot.send_message(uid, "🛰 *Auto\-Deploy:* Update detected\. Pulling\.\.\.", parse_mode="MarkdownV2")
+                        pid = next((p for p in running_processes if p.startswith(f"{uid}_")), None)
+                        if pid:
+                            running_processes[pid]['proc'].terminate()
+                            del running_processes[pid]
+                        success, old_hash = engine.deploy_pull(uid)
+                        if success: await start_configured_process(uid, config, context)
+        except Exception as e: logging.error(f"Watchdog error: {e}")
         await asyncio.sleep(60)
 
 async def start_configured_process(uid, config, context):
@@ -48,12 +49,13 @@ async def start_configured_process(uid, config, context):
     exe = engine.get_venv_exe(uid)
     user_path = engine.get_user_base(uid)
     log_p = os.path.join(user_path, f"{pid}.log")
-    
+
     cmd = config['start_cmd'].replace("python3", exe)
+    # Using shell=True and PIPE for stdin support as requested
     proc = subprocess.Popen(cmd, shell=True, cwd=user_path, env={"PYTHONUNBUFFERED":"1"}, 
                             stdout=open(log_p, "w"), stderr=subprocess.STDOUT, 
                             stdin=subprocess.PIPE, text=True, bufsize=0)
-    
+
     running_processes[pid] = {"proc": proc, "slug": slug, "uid": uid}
     await context.bot.send_message(uid, f"🚀 *Started:* `{escape_md(slug)}`", parse_mode="MarkdownV2")
 
@@ -127,7 +129,8 @@ async def auto_cmd(update, context):
 async def status_cmd(update, context):
     uid, base = update.effective_user.id, engine.get_user_base(update.effective_user.id)
     files = [os.path.relpath(os.path.join(r, f), base) for r, d, fs in os.walk(base) if "venv" not in r and ".git" not in r for f in fs if not f.endswith(".log")]
-    kb = [[InlineKeyboardButton(f"📄 {f}", callback_data=f"manage_{f}")] for f in sorted(files)[:15]]
+    # Ensure callback data doesn't exceed 64 chars
+    kb = [[InlineKeyboardButton(f"📄 {f}", callback_data=f"manage_{f[:50]}")] for f in sorted(files)[:15]]
     kb.append([InlineKeyboardButton("🔄 Refresh", callback_data="status_refresh"), InlineKeyboardButton("🏠 Home", callback_data="nav_home")])
     if update.callback_query: await update.callback_query.edit_message_text("📂 *Explorer*", reply_markup=InlineKeyboardMarkup(kb), parse_mode="MarkdownV2")
     else: await update.message.reply_text("📂 *Explorer*", reply_markup=InlineKeyboardMarkup(kb), parse_mode="MarkdownV2")
@@ -172,7 +175,7 @@ async def delete_cmd(update, context):
     if os.path.exists(target):
         if os.path.isdir(target): shutil.rmtree(target)
         else: os.remove(target)
-        await update.message.reply_text("🗑 Deleted\.")
+        await update.message.reply_text(f"🗑 Deleted `{context.args[0]}`\.")
 
 async def cb_handler(update, context):
     query = update.callback_query; data = query.data; uid = query.from_user.id
@@ -180,16 +183,41 @@ async def cb_handler(update, context):
     if data == "status_refresh": await status_cmd(update, context)
     elif data == "nav_home": await start_cmd(update, context)
     elif data == "view_deploys": await deployments_cmd(update, context)
+    elif data.startswith("manage_"):
+        fname = data.replace("manage_", "")
+        kb = [[InlineKeyboardButton("📄 View Logs", callback_data=f"vlogs_{fname}"), 
+               InlineKeyboardButton("🗑 Delete", callback_data=f"vdel_{fname}")],
+              [InlineKeyboardButton("⬅️ Back", callback_data="status_refresh")]]
+        await query.edit_message_text(f"📂 *Managing:* `{fname}`", reply_markup=InlineKeyboardMarkup(kb), parse_mode="MarkdownV2")
+    elif data.startswith("vlogs_"):
+        # This handles viewing logs for specific files if they are scripts
+        slug = data.replace("vlogs_", "").split(".")[0]
+        await query.edit_message_text(f"📄 *Logs:* \n{get_formatted_logs(uid, slug)}", 
+                                      reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="status_refresh")]]), parse_mode="MarkdownV2")
+    elif data.startswith("vdel_"):
+        fname = data.replace("vdel_", "")
+        target = os.path.join(engine.get_user_base(uid), fname)
+        if os.path.exists(target):
+            if os.path.isdir(target): shutil.rmtree(target)
+            else: os.remove(target)
+        await query.edit_message_text(f"🗑 Deleted `{fname}`", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="status_refresh")]]), parse_mode="MarkdownV2")
 
 if __name__ == '__main__':
     app = ApplicationBuilder().token(BOT_TOKEN).build()
-    handlers = [
+    
+    # 15 Registered Commands
+    cmd_list = [
         ("start", start_cmd), ("connect", connect_cmd), ("run", run_cmd), ("upload", upload_cmd),
         ("sync", sync_cmd), ("auto", auto_cmd), ("status", status_cmd), ("search", search_cmd),
         ("stop", stop_cmd), ("deployments", deployments_cmd), ("logs", logs_cmd), ("send", send_cmd),
         ("delete", delete_cmd)
     ]
-    for n, f in handlers: app.add_handler(CommandHandler(n, f))
+    for n, f in cmd_list: app.add_handler(CommandHandler(n, f))
+    
     app.add_handler(CallbackQueryHandler(cb_handler))
+    
+    # Run the background auto-deploy watchdog
     asyncio.get_event_loop().create_task(watchdog(app))
+    
+    print("Bot Lab v21.0 - Full Commands Loaded")
     app.run_polling()
