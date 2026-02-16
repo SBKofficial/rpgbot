@@ -49,3 +49,31 @@ class LabEngine:
             remote = subprocess.check_output(["git", "rev-parse", f"origin/{branch}"], cwd=path).decode().strip()
             return local != remote
         except: return False
+
+    def connect_repo(self, uid, repo_url):
+        """Initializes a user's isolated workspace with a specific repo."""
+        user_path = self.get_user_base(uid)
+        branch_name = f"user_{uid}"
+        
+        # Security: Use the GIT_TOKEN for the clone if provided
+        if self.git_token and "github.com" in repo_url:
+            repo_url = repo_url.replace("https://", f"https://{self.git_token}@")
+
+        try:
+            # 1. Clean old files if they exist (except venv)
+            for item in os.listdir(user_path):
+                if item != "venv":
+                    path = os.path.join(user_path, item)
+                    shutil.rmtree(path) if os.path.isdir(path) else os.remove(path)
+            
+            # 2. Clone into the directory
+            subprocess.run(["git", "clone", repo_url, "."], cwd=user_path, check=True)
+            
+            # 3. Create or switch to the private user branch
+            subprocess.run(["git", "checkout", "-b", branch_name], cwd=user_path, capture_output=True)
+            subprocess.run(["git", "push", "-u", "origin", branch_name], cwd=user_path, capture_output=True)
+            
+            return True, branch_name
+        except Exception as e:
+            return False, str(e)
+
