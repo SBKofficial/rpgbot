@@ -42,11 +42,11 @@ def run_git_push(commit_msg):
 # --- 1. /start ---
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = (
-        r"🤖 *Bot Lab Manager v17\.6*" + "\n"
+        r"🤖 *Bot Lab Manager v17\.7*" + "\n"
         r"\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-" + "\n"
         r"📂 *FILE COMMANDS*" + "\n"
         r"• `/status` — Explorer to run/delete/install deps\." + "\n"
-        r"• `/upload [name]` — Save code by replying to a file\." + "\n"
+        r"• `/upload [name]` — Save code by replying to a file or text\." + "\n"
         r"• `/sync` — Push all files to GitHub repository\." + "\n\n"
         r"🛰 *MONITORING*" + "\n"
         r"• `/deployments` — View active processes\." + "\n"
@@ -85,18 +85,31 @@ async def deployments_cmd(update, context):
     if update.callback_query: await update.callback_query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(kb), parse_mode="MarkdownV2")
     else: await update.message.reply_text(msg, reply_markup=InlineKeyboardMarkup(kb), parse_mode="MarkdownV2")
 
-# --- 4. /upload (Fixed UnboundLocalError) ---
-async def upload_cmd(update, context):
-    # FIXED: Define uid first before passing to get_user_base
+# --- 4. /upload (Fixed AttributeError and UnboundLocalError) ---
+async def upload_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     base = get_user_base(uid)
     
     if not update.message.reply_to_message or not context.args:
-        return await update.message.reply_text("❌ Reply to code with: `/upload name.py`")
+        return await update.message.reply_text("❌ Reply to a file or code block with: `/upload name.py`")
     
+    replied = update.message.reply_to_message
     filename = context.args[0]
     target = os.path.join(base, filename)
-    with open(target, "w") as f: f.write(update.message.reply_to_message.text.strip())
+    
+    # FIXED: Check for document first, then text to avoid NoneType.strip() crash
+    content = ""
+    if replied.document:
+        doc_file = await replied.document.get_file()
+        byte_array = await doc_file.download_as_bytearray()
+        content = byte_array.decode('utf-8')
+    elif replied.text:
+        content = replied.text
+    else:
+        return await update.message.reply_text("❌ Replied message has no readable content.")
+
+    with open(target, "w") as f: 
+        f.write(content.strip())
     
     m = await update.message.reply_text("💾 Saved. Syncing...")
     res = run_git_push(f"User {uid} uploaded {filename}")
