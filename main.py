@@ -23,29 +23,26 @@ def get_user_base(uid):
     return path
 
 def get_formatted_logs(uid, pid):
-    """Fetches logs and formats them into a Blockquote with '>' prefix"""
     path = os.path.join(get_user_base(uid), f"{pid}.log")
     if not os.path.exists(path): return r"⚠️ _No logs available yet\._"
     try:
         with open(path, "r") as f:
             lines = f.readlines()[-15:]
             if not lines: return r"_Log is currently empty\._"
-            # Requested Blockquote formatting
             return "\n".join([f"> {escape_md(line.strip())}" for line in lines])
     except: return r"❌ _Error reading logs\._"
 
 def run_git_push(commit_msg):
-    """Fixes 'Author identity unknown' by setting local config before push"""
     subprocess.run('git config user.email "bot@lab.com"', shell=True, cwd=ROOT_DIR)
     subprocess.run('git config user.name "BotLabManager"', shell=True, cwd=ROOT_DIR)
     subprocess.run("git add .", shell=True, cwd=ROOT_DIR)
     subprocess.run(f"git commit -m '{commit_msg}'", shell=True, cwd=ROOT_DIR)
     return subprocess.run(f"git push {REPO_URL} main", shell=True, capture_output=True, text=True, cwd=ROOT_DIR)
 
-# --- 1. /start (The Guide) ---
+# --- 1. /start ---
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = (
-        r"🤖 *Bot Lab Manager v17\.5*" + "\n"
+        r"🤖 *Bot Lab Manager v17\.6*" + "\n"
         r"\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-" + "\n"
         r"📂 *FILE COMMANDS*" + "\n"
         r"• `/status` — Explorer to run/delete/install deps\." + "\n"
@@ -88,9 +85,12 @@ async def deployments_cmd(update, context):
     if update.callback_query: await update.callback_query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(kb), parse_mode="MarkdownV2")
     else: await update.message.reply_text(msg, reply_markup=InlineKeyboardMarkup(kb), parse_mode="MarkdownV2")
 
-# --- 4. /upload ---
+# --- 4. /upload (Fixed UnboundLocalError) ---
 async def upload_cmd(update, context):
-    uid, base = update.effective_user.id, get_user_base(uid)
+    # FIXED: Define uid first before passing to get_user_base
+    uid = update.effective_user.id
+    base = get_user_base(uid)
+    
     if not update.message.reply_to_message or not context.args:
         return await update.message.reply_text("❌ Reply to code with: `/upload name.py`")
     
@@ -106,7 +106,9 @@ async def upload_cmd(update, context):
 # --- 5. /run, 6. /stop, 7. /logs, 8. /send, 9. /sync ---
 async def run_cmd(update, context):
     if len(context.args) < 2: return
-    uid, pid, cmd = update.effective_user.id, f"{update.effective_user.id}_{context.args[0]}", " ".join(context.args[1:])
+    uid = update.effective_user.id
+    pid = f"{uid}_{context.args[0]}"
+    cmd = " ".join(context.args[1:])
     log_p = os.path.join(get_user_base(uid), f"{pid}.log")
     running_processes[pid] = subprocess.Popen(cmd, shell=True, cwd=get_user_base(uid), stdout=open(log_p, "w"), stderr=subprocess.STDOUT, stdin=subprocess.PIPE, text=True)
     await update.message.reply_text(f"🚀 Started `{escape_md(context.args[0])}`")
@@ -120,12 +122,14 @@ async def stop_cmd(update, context):
 
 async def logs_cmd(update, context):
     if not context.args: return
-    uid, pid = update.effective_user.id, f"{update.effective_user.id}_{context.args[0]}"
+    uid = update.effective_user.id
+    pid = f"{uid}_{context.args[0]}"
     await update.message.reply_text(f"📄 *Logs:* \n{get_formatted_logs(uid, pid)}", parse_mode="MarkdownV2")
 
 async def send_cmd(update, context):
     if len(context.args) < 2: return
-    pid, text = f"{update.effective_user.id}_{context.args[0]}", " ".join(context.args[1:])
+    pid = f"{update.effective_user.id}_{context.args[0]}"
+    text = " ".join(context.args[1:])
     if pid in running_processes:
         running_processes[pid].stdin.write(text + "\n"); running_processes[pid].stdin.flush()
         await update.message.reply_text(f"⌨️ Sent to `{escape_md(context.args[0])}`")
@@ -156,7 +160,6 @@ async def handle_callback(update, context):
         f = data.replace("pipinst_", ""); pid = f"{uid}_pip_install"
         log_p = os.path.join(get_user_base(uid), f"{pid}.log")
         subprocess.Popen(f"pip install -r {f}", shell=True, cwd=get_user_base(uid), stdout=open(log_p, "w"), stderr=subprocess.STDOUT, text=True)
-        # Transition to logs
         kb = [[InlineKeyboardButton("🔄 Refresh", callback_data=f"showlogs_{pid}"), InlineKeyboardButton("⬅️ Back", callback_data="status_refresh")]]
         await query.edit_message_text(f"📦 *Installing\.\.\.*\n\n{get_formatted_logs(uid, pid)}", reply_markup=InlineKeyboardMarkup(kb), parse_mode="MarkdownV2")
 
@@ -165,7 +168,6 @@ async def handle_callback(update, context):
         cmd = f"node {f}" if f.endswith(".js") else f"python3 -u {f}"
         log_p = os.path.join(get_user_base(uid), f"{pid}.log")
         running_processes[pid] = subprocess.Popen(cmd, shell=True, cwd=get_user_base(uid), stdout=open(log_p, "w"), stderr=subprocess.STDOUT, stdin=subprocess.PIPE, text=True)
-        # Transition to logs
         kb = [[InlineKeyboardButton("🔄 Refresh", callback_data=f"showlogs_{pid}"), InlineKeyboardButton("🛑 Stop", callback_data=f"kill_{pid}")], [InlineKeyboardButton("⬅️ Back", callback_data="status_refresh")]]
         await query.edit_message_text(f"🚀 *Running:* `{escape_md(f)}` \n\n{get_formatted_logs(uid, pid)}", reply_markup=InlineKeyboardMarkup(kb), parse_mode="MarkdownV2")
 
@@ -183,12 +185,9 @@ async def handle_callback(update, context):
 if __name__ == '__main__':
     TOKEN = os.getenv("BOT_TOKEN")
     app = ApplicationBuilder().token(TOKEN).build()
-    
-    # REGISTERING ALL 9 COMMANDS
     for name, func in [("start", start_cmd), ("upload", upload_cmd), ("status", status_cmd), 
                         ("deployments", deployments_cmd), ("run", run_cmd), ("stop", stop_cmd), 
                         ("logs", logs_cmd), ("send", send_cmd), ("sync", sync_cmd)]:
         app.add_handler(CommandHandler(name, func))
-    
     app.add_handler(CallbackQueryHandler(handle_callback))
     app.run_polling()
