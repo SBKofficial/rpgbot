@@ -1,4 +1,4 @@
-import os, subprocess, shutil, json, logging, re
+import os, subprocess, shutil, json, logging
 
 class LabEngine:
     def __init__(self, root_dir="bot_lab"):
@@ -16,6 +16,11 @@ class LabEngine:
         venv_path = os.path.join(user_path, "venv")
         if not os.path.exists(venv_path):
             subprocess.run(["python3", "-m", "venv", venv_path], check=True)
+        
+        req_path = os.path.join(user_path, "requirements.txt")
+        if os.path.exists(req_path):
+            exe = os.path.join(venv_path, "bin", "python3")
+            subprocess.run([exe, "-m", "pip", "install", "-r", req_path], check=True)
         return venv_path
 
     def get_venv_exe(self, uid):
@@ -36,9 +41,10 @@ class LabEngine:
 
     def get_config_template(self):
         return {
-            "name": "my-bot",
+            "name": "my_bot",
             "start_cmd": "python3 main.py",
-            "auto_deploy": True
+            "auto_deploy": True,
+            "env": {"BOT_TOKEN": "12345:ABCDE"}
         }
 
     def connect_repo(self, uid, repo_url):
@@ -47,26 +53,27 @@ class LabEngine:
         if self.git_token and "github.com" in repo_url:
             repo_url = repo_url.replace("https://", f"https://{self.git_token}@")
         try:
-            for item in os.listdir(user_path):
-                if item != "venv":
+            # Hard Clean to fix Status 128
+            if os.path.exists(user_path):
+                for item in os.listdir(user_path):
+                    if item == "venv": continue
                     p = os.path.join(user_path, item)
-                    shutil.rmtree(p) if os.path.isdir(p) else os.remove(p)
-            subprocess.run(["git", "clone", repo_url, "."], cwd=user_path, check=True)
+                    if os.path.isdir(p): shutil.rmtree(p)
+                    else: os.remove(p)
+            
+            res = subprocess.run(["git", "clone", repo_url, "."], cwd=user_path, capture_output=True, text=True)
+            if res.returncode != 0: return False, res.stderr
             subprocess.run(["git", "checkout", "-b", branch_name], cwd=user_path, capture_output=True)
             return True, branch_name
-        except Exception as e:
-            return False, str(e)
+        except Exception as e: return False, str(e)
 
-    def git_push(self, uid, msg):
+    def git_push(self, uid, msg="Bot Update"):
         path = self.get_user_base(uid)
         branch = f"user_{uid}"
         try:
             subprocess.run('git config user.email "bot@lab.com"', shell=True, cwd=path)
-            subprocess.run('git config user.name "BotLabManager"', shell=True, cwd=path)
+            subprocess.run('git config user.name "LabManager"', shell=True, cwd=path)
             subprocess.run("git add .", shell=True, cwd=path)
-            # Check if there are changes to commit
-            check = subprocess.run("git status --porcelain", shell=True, cwd=path, capture_output=True, text=True)
-            if not check.stdout.strip(): return True
             subprocess.run(f'git commit -m "{msg}"', shell=True, cwd=path)
             res = subprocess.run(f"git push origin {branch}", shell=True, cwd=path, capture_output=True)
             return res.returncode == 0
@@ -87,7 +94,6 @@ class LabEngine:
         path = self.get_user_base(uid)
         branch = f"user_{uid}"
         try:
-            old_hash = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=path).decode().strip()
             subprocess.run(["git", "pull", "origin", branch], cwd=path, capture_output=True)
-            return True, old_hash
-        except: return False, None
+            return True
+        except: return False
