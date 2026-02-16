@@ -1,4 +1,4 @@
-  File "/app/bot_lab/7708811819/requirements.txt", line 1
-    Aaah fuck
-         ^^^^
-SyntaxError: invalid syntax
+Traceback (most recent call last):
+  File "/app/bot_lab/7708811819/requirements.txt", line 1, in <module>
+    dotenv
+NameError: name 'dotenv' is not defined
