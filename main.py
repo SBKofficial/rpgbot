@@ -1,4 +1,4 @@
-import os, subprocess, logging, re, io, time, asyncio
+import os, subprocess, logging, re, io, time, asyncio, shutil
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes
 
@@ -7,7 +7,9 @@ ROOT_DIR = os.path.abspath(".")
 LAB_DIR = os.path.join(ROOT_DIR, "bot_lab")
 os.makedirs(LAB_DIR, exist_ok=True)
 
+# Ensure your GIT_TOKEN is set in your environment variables
 GIT_TOKEN = os.getenv("GIT_TOKEN")
+# This is your master repo where everyone's files are backed up
 REPO_URL = f"https://{GIT_TOKEN}@github.com/SBKofficial/rpgbot.git" if GIT_TOKEN else None
 
 running_processes = {} 
@@ -32,60 +34,45 @@ def get_formatted_logs(uid, pid):
             return "\n".join([f"> {escape_md(line.strip())}" for line in lines])
     except: return r"❌ _Error reading logs\._"
 
+# --- FIXED: Auto-Initializing Git Push ---
 def run_git_push(uid, commit_msg):
     user_path = get_user_base(uid)
-    
-    # Check if the folder is actually a Git repository
-    if not os.path.exists(os.path.join(user_path, ".git")):
-        # Return a mock process object so it doesn't crash the bot
-        return subprocess.CompletedProcess(args=[], returncode=1, stderr=b"No git repo initialized")
+    if not REPO_URL:
+        return subprocess.CompletedProcess(args=[], returncode=1, stderr=b"GIT_TOKEN not set")
 
     try:
+        # Check if .git exists; if not, initialize it
+        if not os.path.exists(os.path.join(user_path, ".git")):
+            subprocess.run("git init", shell=True, cwd=user_path)
+            subprocess.run(f"git remote add origin {REPO_URL}", shell=True, cwd=user_path)
+            # Pull first to ensure we don't have conflicts with the main repo
+            subprocess.run("git pull origin main", shell=True, cwd=user_path)
+
         subprocess.run('git config user.email "bot@lab.com"', shell=True, cwd=user_path)
         subprocess.run('git config user.name "BotLabManager"', shell=True, cwd=user_path)
         subprocess.run("git add .", shell=True, cwd=user_path)
+        
+        # Check if there are actual changes to commit to avoid "nothing to commit" error
+        check_status = subprocess.run("git status --porcelain", shell=True, cwd=user_path, capture_output=True, text=True)
+        if not check_status.stdout.strip():
+            return subprocess.CompletedProcess(args=[], returncode=0) # Nothing to push, but not an error
+
         subprocess.run(f"git commit -m '{commit_msg}'", shell=True, cwd=user_path)
-        return subprocess.run(f"git push {REPO_URL} main", shell=True, capture_output=True, cwd=user_path)
+        return subprocess.run(f"git push origin main", shell=True, capture_output=True, cwd=user_path)
     except Exception as e:
         logging.error(f"Git Error for {uid}: {e}")
         return subprocess.CompletedProcess(args=[], returncode=1, stderr=str(e).encode())
 
-
-async def upload_cmd(update, context):
-    user = update.effective_user
-    uid = user.id
-    base = get_user_base(uid) # This ensures the folder exists
-    
-    if not update.message.reply_to_message or not context.args: 
-        return await update.message.reply_text("❌ Reply to a code message/file with `/upload filename.py`")
-
-    replied = update.message.reply_to_message
-    filename = context.args[0]
-    target = os.path.join(base, filename)
-
-    try:
-        if replied.document:
-            f_obj = await replied.document.get_file()
-            content = (await f_obj.download_as_bytearray()).decode('utf-8')
-        elif replied.text:
-            content = replied.text
-        else:
-            return await update.message.reply_text("❌ No text or document detected.")
-
-        with open(target, "w") as f:
-            f.write(content.strip())
-        
-        # Pass UID to the push function
-        res = run_git_push(uid, f"Upload {filename} by {user.first_name}")
-        
-        if res.returncode == 0:
-            await update.message.reply_text(f"✅ `{escape_md(filename)}` uploaded and synced to GitHub\.")
-        else:
-            await update.message.reply_text(f"⚠️ `{escape_md(filename)}` saved locally in your lab, but sync failed \(GitHub error or no repo\)\.")
-            
-    except Exception as e:
-        await update.message.reply_text(f"❌ Error during upload: `{escape_md(str(e))}`")
-
+def start_unbuffered_proc(cmd, cwd, log_path):
+    env = os.environ.copy()
+    env["PYTHONUNBUFFERED"] = "1"
+    env["NODE_OPTIONS"] = "--unbuffered"
+    env["PYTHONPATH"] = f"{cwd}:{env.get('PYTHONPATH', '')}"
+    return subprocess.Popen(
+        cmd, shell=True, cwd=cwd, env=env,
+        stdout=open(log_path, "w"), stderr=subprocess.STDOUT, 
+        stdin=subprocess.PIPE, text=True, bufsize=0
+    )
 
 async def monitor_process(context, uid, pid, slug):
     proc = running_processes.get(pid)
@@ -95,89 +82,99 @@ async def monitor_process(context, uid, pid, slug):
     logs = get_formatted_logs(uid, pid)
     await context.bot.send_message(uid, f"🏁 *Process Finished:* `{escape_md(slug)}`\n\n*Final Logs:*\n{logs}", parse_mode="MarkdownV2")
 
-def start_unbuffered_proc(cmd, cwd, log_path):
-    env = os.environ.copy()
-    env["PYTHONUNBUFFERED"] = "1"
-    env["NODE_OPTIONS"] = "--unbuffered"
-    return subprocess.Popen(
-        cmd, shell=True, cwd=cwd, env=env,
-        stdout=open(log_path, "w"), stderr=subprocess.STDOUT, 
-        stdin=subprocess.PIPE, text=True, bufsize=0
-    )
-
-# --- 1. /start (Verified Introduction) ---
-async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# --- Commands ---
+async def start_cmd(update, context):
     msg = (
-        r"🤖 *Welcome to Bot Lab Manager v18\.9*" + "\n"
-        r"Your personal cloud environment for running and managing bots\." + "\n\n"
-        r"📂 *FILE MANAGEMENT*" + "\n"
-        r"• `/status` — Explorer to run files or install deps\." + "\n"
-        r"• `/upload [name]` — Save code by replying to a file/text\." + "\n"
-        r"• `/delete [name]` — Remove a file permanently\." + "\n"
-        r"• `/sync` — Push files to GitHub\." + "\n\n"
-        r"🛰 *MONITORING*" + "\n"
-        r"• `/deployments` — List active tasks\." + "\n"
-        r"• `/logs [slug]` — View process output\." + "\n\n"
-        r"▶️ *PROCESS CONTROL*" + "\n"
-        r"• `/run [slug] [cmd]` — Manual start\." + "\n"
-        r"• `/stop [slug]` — Force kill a task\." + "\n"
-        r"• `/send [slug] [text]` — Send interactive input \(OTP\)\."
+        r"🤖 *Bot Lab Manager v19\.6*" + "\n"
+        r"Your introduction to the bot's features:" + "\n\n"
+        r"📦 *GIT & REPOS*" + "\n"
+        r"• `/clone [url]` — Clone any repo into your space\." + "\n"
+        r"• `/sync` — Push your current lab to GitHub\." + "\n\n"
+        r"📂 *LAB CONTROL*" + "\n"
+        r"• `/status` — File explorer with module support\." + "\n"
+        r"• `/search [query]` — Find files in sub\-folders\." + "\n"
+        r"• `/upload [name]` — Save code by replying to a file\." + "\n"
+        r"• `/delete [name]` — Remove a file or folder\." + "\n\n"
+        r"▶️ *EXECUTION*" + "\n"
+        r"• `/run [slug] [cmd]` — Start a custom command\." + "\n"
+        r"• `/send [slug] [text]` — Input for OTPs/prompts\." + "\n"
+        r"• `/deployments` — List your active tasks\." + "\n"
+        r"• `/stop [slug]` — Kill a running task\."
     )
     kb = [[InlineKeyboardButton("📂 Explorer", callback_data="status_refresh"),
            InlineKeyboardButton("🛰 Tasks", callback_data="view_deploys")]]
     if update.callback_query: await update.callback_query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(kb), parse_mode="MarkdownV2")
     else: await update.message.reply_text(msg, reply_markup=InlineKeyboardMarkup(kb), parse_mode="MarkdownV2")
 
-# --- 2. /status & 3. /deployments (Restored Direct Commands) ---
 async def status_cmd(update, context):
-    uid = update.effective_user.id
-    base = get_user_base(uid)
-    files = sorted(os.listdir(base))
-    kb = [[InlineKeyboardButton(f"📄 {f}", callback_data=f"manage_{f}")] for f in files if not f.endswith(".log") and f != ".git"]
+    uid, base = update.effective_user.id, get_user_base(update.effective_user.id)
+    all_files = []
+    for root, dirs, files in os.walk(base):
+        if ".git" in root or "node_modules" in root: continue
+        for f in files:
+            rel = os.path.relpath(os.path.join(root, f), base)
+            if not f.endswith(".log"): all_files.append(rel)
+    
+    all_files = sorted(all_files)[:15]
+    kb = [[InlineKeyboardButton(f"📄 {f}", callback_data=f"manage_{f}")] for f in all_files]
     kb.append([InlineKeyboardButton("🔄 Refresh", callback_data="status_refresh"), InlineKeyboardButton("🏠 Home", callback_data="nav_home")])
     text = "📂 *Explorer*"
     if update.callback_query: await update.callback_query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(kb), parse_mode="MarkdownV2")
     else: await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(kb), parse_mode="MarkdownV2")
 
-async def deployments_cmd(update, context):
-    uid, prefix = update.effective_user.id, f"{update.effective_user.id}_"
-    procs = [n.replace(prefix, "") for n in running_processes if n.startswith(prefix)]
-    msg = "🛰 *Active Tasks:*\n" + "\n".join([f"✅ `{escape_md(p)}`" for p in procs]) if procs else r"📭 No active tasks\."
-    kb = [[InlineKeyboardButton("🔄 Refresh", callback_data="view_deploys"), InlineKeyboardButton("🏠 Home", callback_data="nav_home")]]
-    if update.callback_query: await update.callback_query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(kb), parse_mode="MarkdownV2")
-    else: await update.message.reply_text(msg, reply_markup=InlineKeyboardMarkup(kb), parse_mode="MarkdownV2")
+async def search_cmd(update, context):
+    if not context.args: return
+    uid, query, base = update.effective_user.id, context.args[0].lower(), get_user_base(update.effective_user.id)
+    results = []
+    for root, dirs, files in os.walk(base):
+        if ".git" in root: continue
+        for f in files:
+            if query in f.lower(): results.append(os.path.relpath(os.path.join(root, f), base))
+    if not results: return await update.message.reply_text("❌ No files found.")
+    kb = [[InlineKeyboardButton(f"📄 {f}", callback_data=f"manage_{f}")] for f in results[:10]]
+    await update.message.reply_text(f"🔍 *Results for:* `{query}`", reply_markup=InlineKeyboardMarkup(kb), parse_mode="MarkdownV2")
 
-# --- UI Callback ---
 async def handle_callback(update, context):
     query = update.callback_query; uid, data = query.from_user.id, query.data
     await query.answer()
 
     if data == "status_refresh": await status_cmd(update, context)
     elif data == "nav_home": await start_cmd(update, context)
-    elif data == "view_deploys": await deployments_cmd(update, context)
+    elif data == "view_deploys":
+        prefix = f"{uid}_"
+        procs = [n.replace(prefix, "") for n in running_processes if n.startswith(prefix)]
+        msg = "🛰 *Active Tasks:*\n" + "\n".join([f"✅ `{escape_md(p)}`" for p in procs]) if procs else r"📭 No active tasks\."
+        await query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔄 Refresh", callback_data="view_deploys"), InlineKeyboardButton("🏠 Home", callback_data="nav_home")]]), parse_mode="MarkdownV2")
     
     elif data.startswith("manage_"):
-        f = data.replace("manage_", ""); pid = f"{uid}_{f}"
-        kb = [[InlineKeyboardButton("▶️ Run", callback_data=f"qrun_{f}"), InlineKeyboardButton("📄 Logs", callback_data=f"showlogs_{pid}")]]
-        if "requirements.txt" in f: kb.append([InlineKeyboardButton("📦 Install Py Deps", callback_data=f"pipinst_{f}")])
-        if "package.json" in f: kb.append([InlineKeyboardButton("📦 Install Node Deps", callback_data=f"npminst_{f}")])
-        kb.append([InlineKeyboardButton("🗑 Delete", callback_data=f"uidelete_{f}"), InlineKeyboardButton("⬅️ Back", callback_data="status_refresh")])
-        await query.edit_message_text(f"📄 *File:* `{escape_md(f)}`", reply_markup=InlineKeyboardMarkup(kb), parse_mode="MarkdownV2")
+        f_path = data.replace("manage_", ""); f_name = os.path.basename(f_path); pid = f"{uid}_{f_name}"
+        kb = [[InlineKeyboardButton("▶️ Run", callback_data=f"qrun_{f_path}"), InlineKeyboardButton("📄 Logs", callback_data=f"showlogs_{pid}")]]
+        if "requirements.txt" in f_path: kb.append([InlineKeyboardButton("📦 Install Py Deps", callback_data=f"pipinst_{f_path}")])
+        if "package.json" in f_path: kb.append([InlineKeyboardButton("📦 Install Node Deps", callback_data=f"npminst_{f_path}")])
+        kb.append([InlineKeyboardButton("🗑 Delete", callback_data=f"uidelete_{f_path}"), InlineKeyboardButton("⬅️ Back", callback_data="status_refresh")])
+        await query.edit_message_text(f"📄 *File:* `{escape_md(f_path)}`", reply_markup=InlineKeyboardMarkup(kb), parse_mode="MarkdownV2")
 
     elif any(data.startswith(x) for x in ["qrun_", "pipinst_", "npminst_"]):
         mode = "RUN"
-        if "pipinst_" in data: mode, f = "PIP", data.replace("pipinst_", "")
-        elif "npminst_" in data: mode, f = "NPM", data.replace("npminst_", "")
-        else: f = data.replace("qrun_", "")
+        if "pipinst_" in data: mode, f_path = "PIP", data.replace("pipinst_", "")
+        elif "npminst_" in data: mode, f_path = "NPM", data.replace("npminst_", "")
+        else: f_path = data.replace("qrun_", "")
         
-        pid = f"{uid}_{mode}_{f}"
-        cmd = f"pip install -r {f}" if mode == "PIP" else ("npm install" if mode == "NPM" else (f"node {f}" if f.endswith(".js") else f"python3 -u {f}"))
+        full_p = os.path.join(get_user_base(uid), f_path)
+        module_root = os.path.dirname(full_p)
+        f_name = os.path.basename(f_path)
+        pid = f"{uid}_{mode}_{f_name}"
+        
+        if mode == "PIP": cmd = f"pip install -r {f_name}"
+        elif mode == "NPM": cmd = "npm install"
+        else: cmd = f"node {f_name}" if f_name.endswith(".js") else f"python3 -u {f_name}"
+        
         log_p = os.path.join(get_user_base(uid), f"{pid}.log")
-        running_processes[pid] = start_unbuffered_proc(cmd, get_user_base(uid), log_p)
-        asyncio.create_task(monitor_process(context, uid, pid, f))
+        running_processes[pid] = start_unbuffered_proc(cmd, module_root, log_p)
+        asyncio.create_task(monitor_process(context, uid, pid, f_name))
         await asyncio.sleep(1)
         kb = [[InlineKeyboardButton("🔄 Refresh", callback_data=f"showlogs_{pid}"), InlineKeyboardButton("🛑 Stop", callback_data=f"kill_{pid}")], [InlineKeyboardButton("⬅️ Back", callback_data="status_refresh")]]
-        await query.edit_message_text(f"🚀 *Started {mode}:* `{escape_md(f)}` \n\n{get_formatted_logs(uid, pid)}", reply_markup=InlineKeyboardMarkup(kb), parse_mode="MarkdownV2")
+        await query.edit_message_text(f"🚀 *Started {mode}:* `{escape_md(f_name)}` \n\n{get_formatted_logs(uid, pid)}", reply_markup=InlineKeyboardMarkup(kb), parse_mode="MarkdownV2")
 
     elif data.startswith("showlogs_"):
         pid = data.replace("showlogs_", "")
@@ -192,65 +189,94 @@ async def handle_callback(update, context):
 
     elif data.startswith("uidelete_"):
         f = data.replace("uidelete_", ""); target = os.path.join(get_user_base(uid), f)
-        if os.path.exists(target): os.remove(target)
+        if os.path.exists(target): 
+            if os.path.isdir(target): shutil.rmtree(target)
+            else: os.remove(target)
         await query.edit_message_text(f"🗑 Deleted `{escape_md(f)}`", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="status_refresh")]]))
 
-# --- Core Commands ---
+async def clone_cmd(update, context):
+    if not context.args: return await update.message.reply_text("❌ Usage: `/clone [url]`")
+    uid, url = update.effective_user.id, context.args[0]
+    folder = url.split("/")[-1].replace(".git", "")
+    target = os.path.join(get_user_base(uid), folder)
+    if os.path.exists(target): return await update.message.reply_text("⚠️ Folder already exists.")
+    msg = await update.message.reply_text("🛰 *Cloning repository\.\.\.*", parse_mode="MarkdownV2")
+    res = subprocess.run(f"git clone {url} {target}", shell=True, capture_output=True)
+    if res.returncode == 0: await msg.edit_text(f"✅ Successfully cloned `{folder}`")
+    else: await msg.edit_text(f"❌ Clone failed: {res.stderr.decode()[:100]}")
+
 async def send_cmd(update, context):
-    if len(context.args) < 2: return
-    uid, slug = update.effective_user.id, context.args[0]
-    # Smart matching for slugs (finds pirate even if it's user_RUN_pirate.py)
+    if len(context.args) < 2: return await update.message.reply_text("❌ Usage: `/send [slug] [text]`")
+    uid, slug, text = update.effective_user.id, context.args[0], " ".join(context.args[1:])
     target_pid = next((p for p in running_processes if p.startswith(str(uid)) and slug in p), None)
     if target_pid:
-        running_processes[target_pid].stdin.write(" ".join(context.args[1:]) + "\n")
+        running_processes[target_pid].stdin.write(text + "\n")
         running_processes[target_pid].stdin.flush()
-        await update.message.reply_text("⌨️ Sent to stdin.")
+        await update.message.reply_text(f"⌨️ Sent to `{slug}` stdin\.")
+    else: await update.message.reply_text("❌ Process not found.")
+
+async def run_cmd(update, context):
+    if len(context.args) < 2: return await update.message.reply_text("❌ Usage: `/run [slug] [cmd]`")
+    uid, slug, cmd = update.effective_user.id, context.args[0], " ".join(context.args[1:])
+    pid = f"{uid}_{slug}"; log_p = os.path.join(get_user_base(uid), f"{pid}.log")
+    running_processes[pid] = start_unbuffered_proc(cmd, get_user_base(uid), log_p)
+    asyncio.create_task(monitor_process(context, uid, pid, slug))
+    await update.message.reply_text(f"🚀 Started manual task: `{slug}`\.", parse_mode="MarkdownV2")
+
+async def upload_cmd(update, context):
+    uid, base = update.effective_user.id, get_user_base(update.effective_user.id)
+    if not update.message.reply_to_message or not context.args: return await update.message.reply_text("❌ Reply with `/upload filename.py`")
+    replied = update.message.reply_to_message; filename = context.args[0]; target = os.path.join(base, filename)
+    if replied.document:
+        f_obj = await replied.document.get_file()
+        content = (await f_obj.download_as_bytearray()).decode('utf-8')
+    elif replied.text: content = replied.text
+    else: return await update.message.reply_text("❌ No content found.")
+    with open(target, "w") as f: f.write(content.strip())
+    res = run_git_push(uid, f"Upload {filename}")
+    await update.message.reply_text(f"✅ `{escape_md(filename)}` synced\." if res.returncode == 0 else "⚠️ Saved locally, sync skipped.")
 
 async def sync_cmd(update, context):
     uid = update.effective_user.id
-    # Added the 'uid' argument to match the new function signature
-    res = run_git_push(uid, "Manual Sync") 
-    
-    if res.returncode == 0:
-        await update.message.reply_text("✅ Sync OK")
-    else:
-        await update.message.reply_text(f"❌ Failed: {res.stderr.decode() if res.stderr else 'No repo'}")
-
-
-async def run_cmd(update, context):
-    if len(context.args) < 2: return
-    uid, slug = update.effective_user.id, context.args[0]
-    pid, cmd = f"{uid}_{slug}", " ".join(context.args[1:])
-    log_p = os.path.join(get_user_base(uid), f"{pid}.log")
-    running_processes[pid] = start_unbuffered_proc(cmd, get_user_base(uid), log_p)
-    asyncio.create_task(monitor_process(context, uid, pid, slug))
-    await asyncio.sleep(1)
-    kb = [[InlineKeyboardButton("🔄 Refresh", callback_data=f"showlogs_{pid}"), InlineKeyboardButton("🛑 Stop", callback_data=f"kill_{pid}")]]
-    await update.message.reply_text(f"🚀 *Started:* `{escape_md(slug)}` \n\n{get_formatted_logs(uid, pid)}", reply_markup=InlineKeyboardMarkup(kb), parse_mode="MarkdownV2")
+    res = run_git_push(uid, "Manual Sync")
+    await update.message.reply_text("✅ Sync OK" if res.returncode == 0 else "❌ Sync Failed")
 
 async def stop_cmd(update, context):
     if not context.args: return
     uid, slug = update.effective_user.id, context.args[0]
     target_pid = next((p for p in running_processes if p.startswith(str(uid)) and slug in p), None)
-    if target_pid: running_processes[target_pid].terminate(); await update.message.reply_text("🛑 Stopped.")
+    if target_pid: running_processes[target_pid].terminate(); await update.message.reply_text(f"🛑 Stopped `{slug}`\.")
+
+async def deployments_cmd(update, context):
+    uid, prefix = update.effective_user.id, f"{update.effective_user.id}_"
+    procs = [n.replace(prefix, "") for n in running_processes if n.startswith(prefix)]
+    msg = "🛰 *Active Tasks:*\n" + "\n".join([f"✅ `{escape_md(p)}`" for p in procs]) if procs else r"📭 No active tasks\."
+    await update.message.reply_text(msg, parse_mode="MarkdownV2")
 
 async def logs_cmd(update, context):
     if not context.args: return
     uid, slug = update.effective_user.id, context.args[0]
     target_pid = next((p for p in running_processes if p.startswith(str(uid)) and slug in p), f"{uid}_{slug}")
     kb = [[InlineKeyboardButton("🔄 Refresh", callback_data=f"showlogs_{target_pid}"), InlineKeyboardButton("🛑 Stop", callback_data=f"kill_{target_pid}")]]
-    await update.message.reply_text(f"📄 *Logs:* \n{get_formatted_logs(uid, target_pid)}", reply_markup=InlineKeyboardMarkup(kb), parse_mode="MarkdownV2")
+    await update.message.reply_text(f"📄 *Logs for {slug}:*\n{get_formatted_logs(uid, target_pid)}", reply_markup=InlineKeyboardMarkup(kb), parse_mode="MarkdownV2")
 
 async def delete_cmd(update, context):
     if not context.args: return
     target = os.path.join(get_user_base(update.effective_user.id), context.args[0])
-    if os.path.exists(target): os.remove(target); await update.message.reply_text("🗑 Deleted.")
+    if os.path.exists(target):
+        if os.path.isdir(target): shutil.rmtree(target)
+        else: os.remove(target)
+        await update.message.reply_text("🗑 Deleted\.")
 
 if __name__ == '__main__':
-    app = ApplicationBuilder().token(os.getenv("BOT_TOKEN")).build()
-    handlers = [("start", start_cmd), ("upload", upload_cmd), ("run", run_cmd), ("send", send_cmd), 
-                ("sync", sync_cmd), ("status", status_cmd), ("deployments", deployments_cmd),
-                ("stop", stop_cmd), ("logs", logs_cmd), ("delete", delete_cmd)]
+    token = os.getenv("BOT_TOKEN")
+    if not token: print("BOT_TOKEN not found!"); exit()
+    app = ApplicationBuilder().token(token).build()
+    handlers = [
+        ("start", start_cmd), ("status", status_cmd), ("search", search_cmd), ("clone", clone_cmd),
+        ("run", run_cmd), ("send", send_cmd), ("upload", upload_cmd), ("sync", sync_cmd),
+        ("stop", stop_cmd), ("deployments", deployments_cmd), ("logs", logs_cmd), ("delete", delete_cmd)
+    ]
     for n, f in handlers: app.add_handler(CommandHandler(n, f))
     app.add_handler(CallbackQueryHandler(handle_callback))
     app.run_polling()
