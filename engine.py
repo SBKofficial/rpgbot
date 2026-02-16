@@ -6,16 +6,19 @@ import logging
 
 class LabEngine:
     def __init__(self, root_dir="bot_lab"):
+        """Initializes the lab root and ensures the base directory exists."""
         self.root_dir = os.path.abspath(root_dir)
         os.makedirs(self.root_dir, exist_ok=True)
         self.git_token = os.getenv("GIT_TOKEN")
 
     def get_user_base(self, uid):
+        """Returns the isolated folder path for a specific user ID."""
         path = os.path.join(self.root_dir, str(uid))
         os.makedirs(path, exist_ok=True)
         return path
 
     def setup_venv(self, uid):
+        """Creates a virtual environment and installs user requirements."""
         user_path = self.get_user_base(uid)
         venv_path = os.path.join(user_path, "venv")
         if not os.path.exists(venv_path):
@@ -29,9 +32,11 @@ class LabEngine:
         return venv_path
 
     def get_venv_exe(self, uid):
+        """Path to the python executable in the user's venv."""
         return os.path.join(self.get_user_base(uid), "venv", "bin", "python3")
 
     def read_config(self, uid):
+        """Loads the user's bot.json settings."""
         path = os.path.join(self.get_user_base(uid), "bot.json")
         try:
             if os.path.exists(path):
@@ -40,11 +45,13 @@ class LabEngine:
         return None
 
     def save_config(self, uid, config):
+        """Saves settings to the user's bot.json."""
         path = os.path.join(self.get_user_base(uid), "bot.json")
         with open(path, "w") as f:
             json.dump(config, f, indent=4)
 
     def get_config_template(self):
+        """Default configuration for new users."""
         return {
             "name": "my_bot",
             "start_cmd": "python3 main.py",
@@ -54,20 +61,22 @@ class LabEngine:
 
     def connect_repo(self, uid, repo_url):
         """
-        Fixes the 'path already exists' error by performing a total wipe 
-        and then setting up the user's branch environment.
+        FIX: Per your requirement, we force-wipe to allow git clone, 
+        then create the branch and restore the config.
         """
         user_path = self.get_user_base(uid)
         branch_name = f"user_{uid}"
         
-        # Backup existing config if it exists
+        # 1. Backup existing config if it exists
         old_config = self.read_config(uid)
 
+        # Handle Git Token for authentication
         if self.git_token and "github.com" in repo_url:
             repo_url = repo_url.replace("https://", f"https://{self.git_token}@")
         
         try:
-            # TOTAL WIPE: Removes everything including hidden .git folders
+            # 2. FORCE WIPE: Git clone into '.' requires an empty directory.
+            # We delete EVERYTHING except the venv to save installation time.
             if os.path.exists(user_path):
                 for item in os.listdir(user_path):
                     if item == "venv": continue
@@ -75,14 +84,14 @@ class LabEngine:
                     if os.path.isdir(p): shutil.rmtree(p)
                     else: os.remove(p)
             
-            # 1. Fresh Clone
+            # 3. Clone the new repository
             res = subprocess.run(["git", "clone", repo_url, "."], cwd=user_path, capture_output=True, text=True)
             if res.returncode != 0: return False, res.stderr
             
-            # 2. Create/Setup the User Branch
+            # 4. [span_2](start_span)BRANCH CREATION: Create a specific branch for this user[span_2](end_span)
             subprocess.run(["git", "checkout", "-b", branch_name], cwd=user_path, capture_output=True)
             
-            # 3. Restore Config (so they don't lose their settings)
+            # 5. RESTORE CONFIG: Ensure user settings are preserved
             if old_config:
                 self.save_config(uid, old_config)
             else:
@@ -91,7 +100,8 @@ class LabEngine:
             return True, branch_name
         except Exception as e: return False, str(e)
 
-    def git_push(self, uid, msg="Sync from Bot"):
+    def git_push(self, uid, msg="Manual Sync from Bot"):
+        [span_3](start_span)"""Commits and pushes changes to the user's branch[span_3](end_span)."""
         path = self.get_user_base(uid)
         branch = f"user_{uid}"
         try:
@@ -99,12 +109,13 @@ class LabEngine:
             subprocess.run('git config user.name "LabManager"', shell=True, cwd=path)
             subprocess.run("git add .", shell=True, cwd=path)
             subprocess.run(f'git commit -m "{msg}"', shell=True, cwd=path)
-            # Push to the user-specific branch
+            # Pushes to the unique user branch
             res = subprocess.run(f"git push origin {branch}", shell=True, cwd=path, capture_output=True)
             return res.returncode == 0
         except: return False
 
     def git_poll_update(self, uid):
+        """Checks for remote changes on the user branch."""
         path = self.get_user_base(uid)
         branch = f"user_{uid}"
         if not os.path.exists(os.path.join(path, ".git")): return False
@@ -116,9 +127,11 @@ class LabEngine:
         except: return False
 
     def deploy_pull(self, uid):
+        """Pulls the latest from the user's remote branch."""
         path = self.get_user_base(uid)
         branch = f"user_{uid}"
         try:
-            subprocess.run(["git", "pull", "origin", branch], cwd=path, capture_output=True)
-            return True, "Success"
+            res = subprocess.run(["git", "pull", "origin", branch], cwd=path, capture_output=True, text=True)
+            if res.returncode == 0: return True, "Success"
+            return False, res.stderr
         except Exception as e: return False, str(e)
