@@ -1,0 +1,4 @@
+dotenv
+dnspython
+python-telegram-bot[job-queue]
+pymongo
