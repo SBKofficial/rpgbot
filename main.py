@@ -16,51 +16,54 @@ def escape_md(text):
 
 # --- Command Registration ---
 async def post_init(application):
-    """Registers the 9 commands to the Telegram Menu button."""
+    """Registers all 9 commands to the Telegram Menu button."""
     commands = [
-        BotCommand("start", "Intro & manual"),
-        BotCommand("upload", "Save & push [name]"),
-        BotCommand("myfiles", "File explorer & Run"),
-        BotCommand("run", "Start from bot.json"),
-        BotCommand("stop", "Stop bot [slug]"),
-        BotCommand("logs", "View logs [slug]"),
-        BotCommand("send", "Terminal input [slug] [txt]"),
-        BotCommand("deployments", "List active bots"),
-        BotCommand("delete", "Delete file [name]")
+        BotCommand("start", "Introduction and command guide"),
+        BotCommand("myfiles", "List files and quick actions"),
+        BotCommand("upload", "Upload file and push to GitHub"),
+        BotCommand("run", "Run bot from bot.json"),
+        BotCommand("stop", "Stop a bot [slug]"),
+        BotCommand("logs", "View blockquote logs [slug]"),
+        BotCommand("deployments", "List all active bots"),
+        BotCommand("send", "Send terminal input [slug] [txt]"),
+        BotCommand("delete", "Delete a file [filename]")
     ]
     await application.bot.set_my_commands(commands)
 
-# --- UI Logic ---
+# --- UI Helpers ---
 async def get_logs_view(uid, slug):
     path = os.path.join(engine.get_user_base(uid), f"{uid}_{slug}.log")
-    log_content = "Waiting for logs..."
+    log_content = "Waiting for terminal output..."
     if os.path.exists(path):
         with open(path, "r") as f:
             lines = f.readlines()[-15:]
-            log_content = "".join(lines).strip() if lines else "Empty log file."
+            log_content = "".join(lines).strip() if lines else "Log file is empty."
 
+    # Format into blockquotes
     formatted_logs = "\n".join([f">{line}" for line in log_content.split("\n")])
     text = f"📋 *Logs for:* `{escape_md(slug)}`\n\n{escape_md(formatted_logs)}"
     kb = [[InlineKeyboardButton("🔄 Refresh", callback_data=f"logref_{slug}"),
            InlineKeyboardButton("🛑 Stop", callback_data=f"stop_{slug}")]]
     return text, InlineKeyboardMarkup(kb)
 
-# --- Handlers ---
+# --- Command Logic ---
+
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     engine.setup_venv(uid)
     msg = (
-        r"🤖 *Bot Lab Manager v31\.0*" + "\n"
-        r"Every upload is synced to your GitHub branch\." + "\n\n"
-        r"📑 *COMPLETE COMMAND LIST*" + "\n"
-        r"• `/upload [name]` — Save \& auto\-push file\." + "\n"
-        r"• `/myfiles` — Explore files with Run/Delete buttons\." + "\n"
-        r"• `/run` — Execute bot based on `bot.json`\." + "\n"
-        r"• `/logs [slug]` — Blockquote log view with Refresh\." + "\n"
-        r"• `/stop [slug]` — Kill a running process\." + "\n"
-        r"• `/send [slug] [txt]` — Send terminal input\." + "\n"
-        r"• `/deployments` — List all active tasks\." + "\n"
-        r"• `/delete [name]` — Remove a file permanently\."
+        r"🤖 *Bot Lab Manager v32\.0*" + "\n"
+        r"Every `/upload` auto\-pushes to your GitHub branch\." + "\n\n"
+        r"📑 *COMMAND GUIDE*" + "\n"
+        r"• `/start` — Show this intro guide\." + "\n"
+        r"• `/myfiles` — Explore files, Run, and Delete\." + "\n"
+        r"• `/upload [name]` — Save \& push file to GitHub\." + "\n"
+        r"• `/run` — Start bot using `bot.json` config\." + "\n"
+        r"• `/stop [slug]` — Kill a running bot process\." + "\n"
+        r"• `/logs [slug]` — Show logs in blockquotes\." + "\n"
+        r"• `/deployments` — List all active bot tasks\." + "\n"
+        r"• `/send [slug] [txt]` — Send input to bot terminal\." + "\n"
+        r"• `/delete [name]` — Permanently delete a file\."
     )
     kb = [[InlineKeyboardButton("📂 My Files", callback_data="myfiles"),
            InlineKeyboardButton("🛰 Active Tasks", callback_data="view_deploys")]]
@@ -72,7 +75,7 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def upload_cmd(update, context):
     if not update.message.reply_to_message or not context.args:
-        return await update.message.reply_text("❌ Reply to a file with `/upload name.py` ")
+        return await update.message.reply_text("❌ Usage: Reply to a file with `/upload filename.py` ")
     uid, fname = update.effective_user.id, context.args[0]
     path = os.path.join(engine.get_user_base(uid), fname)
     replied = update.message.reply_to_message
@@ -85,7 +88,7 @@ async def upload_cmd(update, context):
 async def run_cmd(update, context):
     uid = update.effective_user.id
     config = engine.read_config(uid)
-    if not config: return await update.message.reply_text("❌ `bot.json` missing.")
+    if not config: return await update.message.reply_text("❌ No `bot.json` found in your lab.")
     slug = config['name']; pid = f"{uid}_{slug}"
     log_p = os.path.join(engine.get_user_base(uid), f"{pid}.log")
     if os.path.exists(log_p): open(log_p, 'w').close()
@@ -97,60 +100,68 @@ async def run_cmd(update, context):
     text, markup = await get_logs_view(uid, slug)
     await update.effective_message.reply_text(f"🚀 *Started\!*\n\n{text}", reply_markup=markup, parse_mode="MarkdownV2")
 
+async def logs_cmd(update, context):
+    if not context.args: return await update.message.reply_text("❌ Usage: `/logs slug_name` ")
+    text, markup = await get_logs_view(update.effective_user.id, context.args[0])
+    await update.message.reply_text(text, reply_markup=markup, parse_mode="MarkdownV2")
+
 async def stop_cmd(update, context):
-    if not context.args: return
+    if not context.args: return await update.message.reply_text("❌ Usage: `/stop slug_name` ")
     slug = context.args[0]; pid = f"{update.effective_user.id}_{slug}"
     if pid in running_processes:
         running_processes[pid]['proc'].terminate(); del running_processes[pid]
-        await update.message.reply_text(f"🛑 Stopped `{slug}`")
+        await update.message.reply_text(f"🛑 Stopped process: `{escape_md(slug)}`", parse_mode="MarkdownV2")
+
+async def delete_cmd(update, context):
+    if not context.args: return await update.message.reply_text("❌ Usage: `/delete filename.py` ")
+    fname = context.args[0]; path = os.path.join(engine.get_user_base(update.effective_user.id), fname)
+    if os.path.exists(path):
+        os.remove(path)
+        await update.message.reply_text(f"🗑 Deleted `{escape_md(fname)}`", parse_mode="MarkdownV2")
 
 async def send_cmd(update, context):
-    if len(context.args) < 2: return
+    if len(context.args) < 2: return await update.message.reply_text("❌ Usage: `/send slug text` ")
     pid = f"{update.effective_user.id}_{context.args[0]}"
     if pid in running_processes:
         running_processes[pid]['proc'].stdin.write(" ".join(context.args[1:]) + "\n")
         running_processes[pid]['proc'].stdin.flush()
-        await update.message.reply_text("⌨️ Input sent.")
+        await update.message.reply_text("⌨️ Sent to terminal.")
 
+async def deployments_cmd(update, context):
+    uid = update.effective_user.id
+    active = [v['slug'] for k, v in running_processes.items() if k.startswith(f"{uid}_")]
+    msg = "🛰 *Active Bots:*\n" + "\n".join([f"✅ `{escape_md(p)}`" for p in active]) if active else "📭 No active bots."
+    await update.effective_message.reply_text(msg, parse_mode="MarkdownV2")
+
+# --- Callback Handler ---
 async def cb_handler(update, context):
     query = update.callback_query; data = query.data; uid = query.from_user.id; await query.answer()
-    
     if data == "nav_home": await start_cmd(update, context)
     elif data == "myfiles":
         files = [f for f in os.listdir(engine.get_user_base(uid)) if f not in ["venv", ".git"] and not f.endswith(".log")]
         kb = [[InlineKeyboardButton(f"📄 {f}", callback_data=f"fopt_{f}")] for f in sorted(files)]
         kb.append([InlineKeyboardButton("🏠 Home", callback_data="nav_home")])
         await query.edit_message_text("📂 *Your Lab Files:*", reply_markup=InlineKeyboardMarkup(kb), parse_mode="MarkdownV2")
-    elif data.startswith("fopt_"):
-        fname = data.replace("fopt_", "")
-        kb = [[InlineKeyboardButton("▶️ Run", callback_data=f"run_logic_{fname}"),
-               InlineKeyboardButton("📋 Logs", callback_data=f"logref_{fname.split('.')[0]}")],
-              [InlineKeyboardButton("🗑 Delete", callback_data=f"fdel_{fname}"),
-               InlineKeyboardButton("⬅️ Back", callback_data="myfiles")]]
-        await query.edit_message_text(f"📄 *File:* `{escape_md(fname)}`", reply_markup=InlineKeyboardMarkup(kb), parse_mode="MarkdownV2")
     elif data.startswith("logref_"):
         text, markup = await get_logs_view(uid, data.replace("logref_", ""))
         try: await query.edit_message_text(text, reply_markup=markup, parse_mode="MarkdownV2")
         except BadRequest: pass
-    elif data == "view_deploys":
-        active = [v['slug'] for k, v in running_processes.items() if k.startswith(f"{uid}_")]
-        kb = [[InlineKeyboardButton(f"✅ {p}", callback_data=f"logref_{p}")] for p in active]
-        kb.append([InlineKeyboardButton("🏠 Home", callback_data="nav_home")])
-        await query.edit_message_text("🛰 *Active Tasks:*", reply_markup=InlineKeyboardMarkup(kb), parse_mode="MarkdownV2")
+    elif data.startswith("stop_"):
+        slug = data.replace("stop_", ""); context.args = [slug]; await stop_cmd(update, context)
 
 if __name__ == '__main__':
     app = ApplicationBuilder().token(BOT_TOKEN).post_init(post_init).build()
     
-    # Registering all Command Handlers
+    # Mapping all 9 commands
     app.add_handler(CommandHandler("start", start_cmd))
-    app.add_handler(CommandHandler("upload", upload_cmd))
     app.add_handler(CommandHandler("myfiles", lambda u,c: cb_handler(u,c)))
+    app.add_handler(CommandHandler("upload", upload_cmd))
     app.add_handler(CommandHandler("run", run_cmd))
     app.add_handler(CommandHandler("stop", stop_cmd))
-    app.add_handler(CommandHandler("logs", lambda u,c: run_cmd(u,c))) # Uses run logic to show logs
+    app.add_handler(CommandHandler("logs", logs_cmd))
+    app.add_handler(CommandHandler("deployments", deployments_cmd))
     app.add_handler(CommandHandler("send", send_cmd))
-    app.add_handler(CommandHandler("deployments", lambda u,c: cb_handler(u,c)))
-    app.add_handler(CommandHandler("delete", lambda u,c: cb_handler(u,c)))
+    app.add_handler(CommandHandler("delete", delete_cmd))
     
     app.add_handler(CallbackQueryHandler(cb_handler))
     app.run_polling()
