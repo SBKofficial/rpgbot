@@ -158,14 +158,38 @@ async def myfiles_cmd(update, context):
         await update.effective_message.reply_text("📂 <b>Files:</b>", reply_markup=InlineKeyboardMarkup(kb), parse_mode="HTML")
 
 async def upload_cmd(update, context):
-    """4. Upload logic."""
+    """4. Upload logic with immediate GitHub Sync."""
     if not update.message.reply_to_message or not context.args:
         return await update.message.reply_text("❌ Reply to a file with: <code>/upload name.py</code>", parse_mode="HTML")
+    
     uid, fname = update.effective_user.id, context.args[0]
+    user_path = engine.get_user_base(uid)
+    local_path = os.path.join(user_path, fname)
+    
+    # 1. Download from Telegram
     replied = update.message.reply_to_message
     content = (await (await replied.document.get_file()).download_as_bytearray()) if replied.document else replied.text.encode()
-    with open(os.path.join(engine.get_user_base(uid), fname), "wb") as f: f.write(content)
-    await update.message.reply_text(f"✅ Saved <code>{esc(fname)}</code>", parse_mode="HTML")
+    
+    with open(local_path, "wb") as f: 
+        f.write(content)
+    
+    # 2. Sync to GitHub immediately
+    success, git_log = engine.git_push_file(uid, fname)
+    
+    if success:
+        await update.message.reply_text(
+            f"✅ <b>Saved & Synced!</b>\n"
+            f"📄 File: <code>{esc(fname)}</code>\n"
+            f"🛰 Status: <code>{esc(git_log)}</code>", 
+            parse_mode="HTML"
+        )
+    else:
+        await update.message.reply_text(
+            f"⚠️ <b>Saved locally, but Git Sync failed:</b>\n"
+            f"<blockquote><code>{esc(git_log)}</code></blockquote>", 
+            parse_mode="HTML"
+        )
+
 
 async def stop_cmd(update, context):
     """5. Kill process logic."""
