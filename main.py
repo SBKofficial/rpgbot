@@ -77,45 +77,72 @@ async def execute_shell(update, context, cmd, slug):
 # --- Function Logics for all 9 Commands ---
 
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """1. Intro & Command Guide Logic."""
+    """
+    1. Intro & Command Guide Logic.
+    Now includes GitHub recovery to prevent 'forgotten files' on restart.
+    """
     uid = update.effective_user.id
-    engine.setup_venv(uid)
-    msg = (
-        "🤖 <b>Bot Lab Manager v50.0</b>\n"
-        "Your workspace is ready. HTML mode active.\n\n"
-        "📑 <b>COMMAND LIST</b>\n"
-        "• /start - This guide\n"
-        "• /myfiles - File list & buttons\n"
-        "• /upload [name] - Save & Git Push\n"
-        "• /run [cmd] - <code>npm</code>, <code>pip</code>, or <code>bot.json</code>\n"
-        "• /stop [slug] - Kill process\n"
-        "• /logs [slug] - View logs\n"
-        "• /deployments - Active tasks\n"
-        "• /send [slug] [txt] - Terminal input\n"
-        "• /delete [name] - Delete file"
-    )
-    kb = [[InlineKeyboardButton("📂 My Files", callback_data="myfiles"),
-           InlineKeyboardButton("🛰 Active Tasks", callback_data="view_deploys")]]
     
+    # Send a status update so the user knows recovery is happening
+    status_msg = "🛰 <b>Initializing Lab...</b>\nConnecting to GitHub to recover your files."
     if update.callback_query:
-        await update.callback_query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(kb), parse_mode="HTML")
+        await update.callback_query.edit_message_text(status_msg, parse_mode="HTML")
+        sent_msg = update.callback_query.message
     else:
-        await update.effective_message.reply_text(msg, reply_markup=InlineKeyboardMarkup(kb), parse_mode="HTML")
+        sent_msg = await update.effective_message.reply_text(status_msg, parse_mode="HTML")
+
+    # --- RECOVERY LOGIC ---
+    # This pulls your files back from the cloud before showing the menu
+    success, git_status = engine.sync_from_github(uid)
+    engine.setup_venv(uid)
+    # ----------------------
+
+    msg = (
+        "🤖 <b>Bot Lab Manager v52.0</b>\n"
+        f"📡 Status: <i>{esc(git_status)}</i>\n\n"
+        "Welcome! I am your persistent cloud terminal. Use the commands below to manage your projects:\n\n"
+        "📑 <b>COMMAND MANUAL</b>\n"
+        "• /start - Reset and view this manual\n"
+        "• /myfiles - View your recovered files and manage them\n"
+        "• /upload [name] - Save a file and <b>Sync to GitHub</b>\n"
+        "• /run [cmd] - Execute <code>npm</code>, <code>pip</code>, or <code>bot.json</code>\n"
+        "• /stop [slug] - Kill a running process immediately\n"
+        "• /logs [slug] - View real-time terminal output\n"
+        "• /deployments - List all active background tasks\n"
+        "• /send [slug] [txt] - Send input to a process (phone/code)\n"
+        "• /delete [name] - Remove file from local and cloud\n\n"
+        "<i>All work is automatically saved to your GitHub branch.</i>"
+    )
+    
+    kb = [
+        [InlineKeyboardButton("📂 My Files", callback_data="myfiles"),
+         InlineKeyboardButton("🛰 Active Tasks", callback_data="view_deploys")],
+        [InlineKeyboardButton("🏠 Refresh Home", callback_data="nav_home")]
+    ]
+
+    await sent_msg.edit_text(msg, reply_markup=InlineKeyboardMarkup(kb), parse_mode="HTML")
 
 async def run_cmd(update, context):
-    """2. Runner logic supporting direct shell or bot.json."""
+    """
+    2. Runner logic supporting direct shell or bot.json.
+    Automatically routes 'pip' to the local Venv.
+    """
     uid = update.effective_user.id
     if not context.args:
+        # If no args, look for a bot.json configuration
         config = engine.read_config(uid)
         if config:
             cmd = f"{engine.get_venv_exe(uid)} {config.get('main_file', 'bot.py')}"
             return await execute_shell(update, context, cmd, config.get('name', 'bot'))
-        return await update.effective_message.reply_text("❌ Usage: <code>/run pip install ...</code>", parse_mode="HTML")
+        return await update.effective_message.reply_text("❌ <b>Usage:</b>\n<code>/run pip install [pkg]</code>\n<code>/run node [file].js</code>", parse_mode="HTML")
 
     raw_cmd = " ".join(context.args)
-    if raw_cmd.startswith("pip "):
-        raw_cmd = raw_cmd.replace("pip ", f"{engine.get_venv_exe(uid).replace('python3', 'pip')} ", 1)
     
+    # Auto-Venv routing for pip
+    if raw_cmd.startswith("pip "):
+        venv_pip = engine.get_venv_exe(uid).replace("python3", "pip")
+        raw_cmd = raw_cmd.replace("pip ", f"{venv_pip} ", 1)
+
     await execute_shell(update, context, raw_cmd, "terminal")
 
 async def myfiles_cmd(update, context):
