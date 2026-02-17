@@ -1,4 +1,4 @@
-import os, subprocess, logging, re, asyncio, shutil, json
+import os, subprocess, logging, re, asyncio, json, shutil
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes
 from engine import LabEngine
@@ -6,7 +6,7 @@ from engine import LabEngine
 # --- Initialization ---
 engine = LabEngine()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-running_processes = {} # Stores { pid: {proc, slug, uid} }
+running_processes = {} # { pid: {proc, slug, uid} }
 
 logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s', level=logging.INFO)
 
@@ -14,107 +14,99 @@ def escape_md(text):
     """Escapes special characters for Telegram MarkdownV2."""
     return re.sub(r'([_*\[\]()~`>#+\-=|{}.!])', r'\\\1', str(text))
 
-async def start_configured_process(uid, config, context):
-    """Starts the sub-bot using the user's specific virtual environment."""
-    slug = config['name']
-    pid = f"{uid}_{slug}"
-    exe = engine.get_venv_exe(uid)
-    user_path = engine.get_user_base(uid)
-    log_p = os.path.join(user_path, f"{pid}.log")
-
-    # Replace 'python3' with the absolute path to the venv python
-    cmd = config['start_cmd'].replace("python3", exe)
-    
-    # Start the process in unbuffered mode so logs appear instantly
-    proc = subprocess.Popen(
-        cmd, shell=True, cwd=user_path, 
-        env={"PYTHONUNBUFFERED":"1", **config.get("env", {})}, 
-        stdout=open(log_p, "w"), stderr=subprocess.STDOUT, 
-        stdin=subprocess.PIPE, text=True, bufsize=0
-    )
-
-    running_processes[pid] = {"proc": proc, "slug": slug, "uid": uid}
-    await context.bot.send_message(uid, f"🚀 *Started:* `{escape_md(slug)}`", parse_mode="MarkdownV2")
-
 # --- Command Handlers ---
 
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Introduces the bot and lists all available commands."""
+    """
+    Acts as an introduction to the bot and explains all available commands.
+    """
     uid = update.effective_user.id
-    engine.setup_venv(uid) # Ensure user folder and venv exist
+    engine.setup_venv(uid)
     
     msg = (
-        r"🤖 *Bot Lab Manager v22\.0*" + "\n"
-        r"⚡ *BRANCH-SYNC EDITION*" + "\n\n"
-        r"📂 *FILE MANAGEMENT*" + "\n"
-        r"• `/upload [name]` — Save file \& push to GitHub branch\." + "\n"
-        r"• `/status` — View local files \& delete them\." + "\n"
-        r"• `/delete [name]` — Remove a file locally\." + "\n\n"
-        r"▶️ *EXECUTION*" + "\n"
-        r"• `/run` — Start bot based on `bot.json`\." + "\n"
-        r"• `/deployments` — List your running tasks\." + "\n"
-        r"• `/stop [slug]` — Kill a running process\." + "\n"
-        r"• `/logs [slug]` — See the last 15 lines of output\."
+        r"🤖 *Welcome to Bot Lab Manager v25\.0*" + "\n"
+        r"This bot allows you to host, run, and sync your Python scripts directly to GitHub branches\." + "\n\n"
+        
+        r"📑 *COMMAND GUIDE*" + "\n\n"
+        
+        r"📂 *File Management*" + "\n"
+        r"• `/upload [name]` — Save a file locally \& auto\-push to your GitHub branch\. Reply to a file or code block with this\." + "\n"
+        r"• `/myfiles` — View all files in your lab and manage them\." + "\n"
+        r"• `/delete [name]` — Permanently remove a file from your lab\." + "\n\n"
+        
+        r"🚀 *Execution*" + "\n"
+        r"• `/run` — Starts your bot using the settings in `bot.json`\." + "\n"
+        r"• `/stop [slug]` — Force stop a running process\." + "\n"
+        r"• `/logs [slug]` — See the most recent output from your bot\." + "\n"
+        r"• `/send [slug] [text]` — Send text input to a running bot's terminal\." + "\n"
+        r"• `/deployments` — See all your currently active bots\." + "\n\n"
+        
+        r"💡 *Note:* Every time you `/upload`, your changes are backed up to the `user_" + str(uid) + r"` branch on your repository\."
     )
-    kb = [[
-        InlineKeyboardButton("📂 Explorer", callback_data="status_refresh"),
-        InlineKeyboardButton("🛰 Tasks", callback_data="view_deploys")
-    ]]
     
-    # FIX: Check if triggered by button or /command to prevent AttributeError
+    kb = [
+        [InlineKeyboardButton("📂 My Files", callback_data="files_refresh"),
+         InlineKeyboardButton("🛰 Active Tasks", callback_data="view_deploys")],
+        [InlineKeyboardButton("❓ Help / Support", url="https://t.me/your_support_link")]
+    ]
+    
+    # Use effective_message to handle both /start and Home button clicks
     if update.callback_query:
         await update.callback_query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(kb), parse_mode="MarkdownV2")
     else:
         await update.effective_message.reply_text(msg, reply_markup=InlineKeyboardMarkup(kb), parse_mode="MarkdownV2")
 
 async def upload_cmd(update, context):
-    """Saves a file locally and automatically pushes it to the user's GitHub branch."""
     if not update.message.reply_to_message or not context.args: 
-        return await update.message.reply_text("❌ Usage: Reply to a file/text with `/upload filename.py` ")
+        return await update.message.reply_text("❌ Usage: Reply to a file with `/upload filename.py` ")
     
-    uid = update.effective_user.id
-    filename = context.args[0]
-    target = os.path.join(engine.get_user_base(uid), filename)
-    
-    # 1. Capture Content
+    uid, fname = update.effective_user.id, context.args[0]
+    path = os.path.join(engine.get_user_base(uid), fname)
     replied = update.message.reply_to_message
-    if replied.document:
-        f = await (await replied.document.get_file()).download_as_bytearray()
-        with open(target, "wb") as file: file.write(f)
-    else:
-        with open(target, "w") as file: file.write(replied.text.strip())
     
-    # 2. Automated GitHub Push to User Branch
-    success, git_msg = engine.git_push_file(uid, filename)
+    content = (await (await replied.document.get_file()).download_as_bytearray()) if replied.document else replied.text.encode()
+    with open(path, "wb") as f: f.write(content)
     
+    # Auto-push to GitHub branch via engine
+    success, err = engine.git_push_file(uid, fname)
     if success:
         await update.message.reply_text(f"✅ Saved \& Pushed to branch `user_{uid}`", parse_mode="MarkdownV2")
     else:
-        await update.message.reply_text(f"⚠️ Saved locally, but GitHub Push failed: `{escape_md(git_msg)}`", parse_mode="MarkdownV2")
+        await update.message.reply_text(f"⚠️ Saved locally, but GitHub push failed: `{escape_md(err)}`", parse_mode="MarkdownV2")
 
-async def status_cmd(update, context):
-    """Shows local files and provides management buttons."""
-    uid, base = update.effective_user.id, engine.get_user_base(update.effective_user.id)
-    files = [f for f in os.listdir(base) if f != "venv" and not f.endswith(".log") and not f.startswith(".git")]
+async def myfiles_cmd(update, context):
+    uid = update.effective_user.id
+    base = engine.get_user_base(uid)
+    files = [f for f in os.listdir(base) if f not in ["venv", ".git"] and not f.endswith(".log")]
     
     kb = [[InlineKeyboardButton(f"📄 {f}", callback_data=f"manage_{f[:50]}")] for f in sorted(files)]
     kb.append([InlineKeyboardButton("🏠 Home", callback_data="nav_home")])
     
+    text = "📂 *Your Lab Files:*"
     if update.callback_query:
-        await update.callback_query.edit_message_text("📂 *Local Files:*", reply_markup=InlineKeyboardMarkup(kb), parse_mode="MarkdownV2")
+        await update.callback_query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(kb), parse_mode="MarkdownV2")
     else:
-        await update.effective_message.reply_text("📂 *Local Files:*", reply_markup=InlineKeyboardMarkup(kb), parse_mode="MarkdownV2")
+        await update.effective_message.reply_text(text, reply_markup=InlineKeyboardMarkup(kb), parse_mode="MarkdownV2")
 
 async def run_cmd(update, context):
-    """Executes the bot startup based on bot.json config."""
     uid = update.effective_user.id
     config = engine.read_config(uid)
-    if not config:
-        return await update.message.reply_text("❌ `bot.json` not found. Upload it first!")
-    await start_configured_process(uid, config, context)
+    if not config: return await update.message.reply_text("❌ `bot.json` missing! Upload it to start.")
+    
+    pid = f"{uid}_{config['name']}"
+    log_p = os.path.join(engine.get_user_base(uid), f"{pid}.log")
+    
+    proc = subprocess.Popen(
+        config['start_cmd'].replace("python3", engine.get_venv_exe(uid)), 
+        shell=True, cwd=engine.get_user_base(uid), 
+        stdout=open(log_p, "w"), stderr=subprocess.STDOUT, 
+        stdin=subprocess.PIPE, text=True, bufsize=0
+    )
+    
+    running_processes[pid] = {"proc": proc, "slug": config['name']}
+    await update.message.reply_text(f"🚀 Started: `{escape_md(config['name'])}`", parse_mode="MarkdownV2")
 
 async def stop_cmd(update, context):
-    """Terminates a running process."""
     if not context.args: return
     pid = f"{update.effective_user.id}_{context.args[0]}"
     if pid in running_processes:
@@ -122,26 +114,61 @@ async def stop_cmd(update, context):
         del running_processes[pid]
         await update.message.reply_text(f"🛑 Stopped `{context.args[0]}`")
 
-async def cb_handler(update, context):
-    """Handles all inline button clicks."""
-    query = update.callback_query
-    data = query.data
-    await query.answer()
+async def deployments_cmd(update, context):
+    uid_prefix = f"{update.effective_user.id}_"
+    active = [v['slug'] for k, v in running_processes.items() if k.startswith(uid_prefix)]
+    msg = "🛰 *Active Deployments:*\n" + "\n".join([f"✅ `{escape_md(p)}`" for p in active]) if active else "📭 No active tasks."
     
-    if data == "status_refresh": await status_cmd(update, context)
-    elif data == "nav_home": await start_cmd(update, context)
-    elif data == "view_deploys":
-        uid_prefix = f"{query.from_user.id}_"
-        active = [v['slug'] for k, v in running_processes.items() if k.startswith(uid_prefix)]
-        msg = "🛰 *Active Tasks:*\n" + "\n".join([f"✅ `{escape_md(p)}`" for p in active]) if active else "📭 No active tasks."
-        await query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="nav_home")]]), parse_mode="MarkdownV2")
+    if update.callback_query:
+        await update.callback_query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Home", callback_data="nav_home")]]), parse_mode="MarkdownV2")
+    else:
+        await update.effective_message.reply_text(msg, parse_mode="MarkdownV2")
+
+async def logs_cmd(update, context):
+    if not context.args: return
+    uid, slug = update.effective_user.id, context.args[0]
+    path = os.path.join(engine.get_user_base(uid), f"{uid}_{slug}.log")
+    
+    if os.path.exists(path):
+        with open(path, "r") as f:
+            lines = f.readlines()[-15:]
+            await update.message.reply_text(f"📋 *Logs for {slug}:*\n`{''.join(lines)}`", parse_mode="MarkdownV2")
+    else:
+        await update.message.reply_text("❌ No logs found.")
+
+async def send_cmd(update, context):
+    if len(context.args) < 2: return
+    pid = f"{update.effective_user.id}_{context.args[0]}"
+    if pid in running_processes:
+        running_processes[pid]['proc'].stdin.write(" ".join(context.args[1:]) + "\n")
+        running_processes[pid]['proc'].stdin.flush()
+        await update.message.reply_text("⌨️ Input sent to terminal.")
+
+async def delete_cmd(update, context):
+    if not context.args: return
+    fname = context.args[0]
+    path = os.path.join(engine.get_user_base(update.effective_user.id), fname)
+    if os.path.exists(path):
+        if os.path.isdir(path): shutil.rmtree(path)
+        else: os.remove(path)
+        await update.message.reply_text(f"🗑 Deleted `{fname}`")
+
+async def cb_handler(update, context):
+    query = update.callback_query; data = query.data; await query.answer()
+    if data == "nav_home": await start_cmd(update, context)
+    elif data == "files_refresh": await myfiles_cmd(update, context)
+    elif data == "view_deploys": await deployments_cmd(update, context)
 
 if __name__ == '__main__':
     app = ApplicationBuilder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start_cmd))
     app.add_handler(CommandHandler("upload", upload_cmd))
-    app.add_handler(CommandHandler("status", status_cmd))
+    app.add_handler(CommandHandler("myfiles", myfiles_cmd))
     app.add_handler(CommandHandler("run", run_cmd))
     app.add_handler(CommandHandler("stop", stop_cmd))
+    app.add_handler(CommandHandler("deployments", deployments_cmd))
+    app.add_handler(CommandHandler("logs", logs_cmd))
+    app.add_handler(CommandHandler("send", send_cmd))
+    app.add_handler(CommandHandler("delete", delete_cmd))
     app.add_handler(CallbackQueryHandler(cb_handler))
     app.run_polling()
