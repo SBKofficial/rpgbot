@@ -3,6 +3,7 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, BotComm
 from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes
 from telegram.error import BadRequest
 from engine import LabEngine
+from admin import admin_stats, ADMIN_ID
 
 # --- Initialization ---
 engine = LabEngine()
@@ -299,6 +300,11 @@ async def delete_cmd(update, context):
     else:
         await update.effective_message.reply_text(msg, parse_mode="HTML")
 
+# Place this near your other command functions (like start_cmd or run_cmd)
+async def admin_wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Bridge to the admin monitoring logic."""
+    await admin_stats(update, context, running_processes, engine)
+
 # --- All Button Callback Logics ---
 
 async def cb_handler(update, context):
@@ -381,6 +387,7 @@ if __name__ == '__main__':
         CommandHandler("start", start_cmd), CommandHandler("myfiles", myfiles_cmd),
         CommandHandler("upload", upload_cmd), CommandHandler("run", run_cmd),
         CommandHandler("stop", stop_cmd), CommandHandler("logs", logs_cmd),
+        CommandHandler("admin_stats", admin_wrapper),
         CommandHandler("deployments", deployments_cmd), CommandHandler("send", send_cmd),
         CommandHandler("delete", delete_cmd), CallbackQueryHandler(cb_handler)
     ]
