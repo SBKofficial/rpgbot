@@ -32,47 +32,57 @@ async def post_init(application):
 
 # --- UI Helper: HTML Blockquote Logs ---
 
-async def get_logs_view(uid, slug):
-    """Logic to fetch terminal output and wrap in HTML blockquotes."""
-    path = os.path.join(engine.get_user_base(uid), f"{uid}_{slug}.log")
-    log_content = "Waiting for terminal output..."
-    if os.path.exists(path):
-        with open(path, "r") as f:
-            lines = f.readlines()[-15:]
-            log_content = "".join(lines).strip() if lines else "Empty log file."
-
-    text = (f"📋 <b>Logs for:</b> <code>{esc(slug)}</code>\n\n"
-            f"<blockquote><code>{esc(log_content)}</code></blockquote>\n"
-            f"<i>(Click Refresh to see new updates)</i>")
-    
-    kb = [[InlineKeyboardButton("🔄 Refresh", callback_data=f"logref_{slug}"),
-           InlineKeyboardButton("🛑 Stop", callback_data=f"stop_{slug}")],
-          [InlineKeyboardButton("🏠 Home", callback_data="nav_home")]]
-    return text, InlineKeyboardMarkup(kb)
-
-# --- Core Execution Logic ---
-
 async def execute_shell(update, context, cmd, slug):
-    """Handles subprocess creation for Python, Node, Pip, or Npm."""
+    """Handles hardened subprocess creation using Process Groups."""
     uid = update.effective_user.id
     user_path = engine.get_user_base(uid)
-    pid = f"{uid}_{slug}"
-    log_p = os.path.join(user_path, f"{pid}.log")
-    
-    # Reset log and start process
+    pid_key = f"{uid}_{slug}"
+    log_p = os.path.join(user_path, f"{pid_key}.log")
+
+    # Clear old logs before starting
     open(log_p, 'w').close()
-    proc = subprocess.Popen(cmd, shell=True, cwd=user_path, stdout=open(log_p, "w"), 
-                            stderr=subprocess.STDOUT, stdin=subprocess.PIPE, text=True, bufsize=0)
-    
-    running_processes[pid] = {"proc": proc, "slug": slug}
-    
+
+    # Use the new engine method to start with os.setsid
+    proc = engine.start_subprocess(cmd, user_path, log_p)
+
+    running_processes[pid_key] = {"proc": proc, "slug": slug}
+
+    # Fetch updated view
     text, markup = await get_logs_view(uid, slug)
     msg = f"🚀 <b>Running:</b> <code>{esc(cmd)}</code>\n\n{text}"
-    
+
     if update.callback_query:
         await update.callback_query.edit_message_text(msg, reply_markup=markup, parse_mode="HTML")
     else:
         await update.effective_message.reply_text(msg, reply_markup=markup, parse_mode="HTML")
+
+
+async def get_logs_view(uid, slug):
+    """Fetches the tail end of the log file without missing single lines."""
+    path = os.path.join(engine.get_user_base(uid), f"{uid}_{slug}.log")
+    log_content = "Waiting for terminal output..."
+    
+    if os.path.exists(path):
+        with open(path, "r") as f:
+            # Move to the end and read the last 3800 chars (Safe for Telegram)
+            f.seek(0, 2)
+            size = f.tell()
+            f.seek(max(0, size - 3800))
+            log_content = f.read().strip()
+            
+    if not log_content:
+        log_content = "Process started, but no output yet..."
+
+    text = (f"📋 <b>Terminal Output:</b> <code>{esc(slug)}</code>\n\n"
+            f"<blockquote><code>{esc(log_content)}</code></blockquote>\n"
+            f"<i>Last refreshed: Just now</i>")
+    
+    kb = [[InlineKeyboardButton("🔄 Refresh", callback_data=f"logref_{slug}"),
+           InlineKeyboardButton("🛑 Stop", callback_data=f"stop_{slug}")],
+          [InlineKeyboardButton("🏠 Home", callback_data="nav_home")]]
+    
+    return text, InlineKeyboardMarkup(kb)
+
 
 # --- Function Logics for all 9 Commands ---
 
