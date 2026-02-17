@@ -140,12 +140,43 @@ async def upload_cmd(update, context):
     await update.message.reply_text(status, parse_mode="HTML")
 
 async def run_cmd(update, context):
-    """4. Logic for /run: Executes based on bot.json settings."""
+    """LOGIC: Execute via bot.json OR run a direct shell command."""
     uid = update.effective_user.id
+    
+    # If the user typed something after /run (e.g., /run pip install telethon)
+    if context.args:
+        cmd = " ".join(context.args)
+        # Force use of venv if they type 'pip' or 'python'
+        venv_exe = engine.get_venv_exe(uid)
+        cmd = cmd.replace("pip ", f"{venv_exe.replace('python3', 'pip')} ")
+        cmd = cmd.replace("python ", f"{venv_exe} ")
+        
+        # Execute as a temporary task
+        slug = "manual_cmd"
+        await dynamic_run_raw(update, context, cmd, slug)
+        return
+
+    # Otherwise, fallback to bot.json logic
     config = engine.read_config(uid)
     if not config: 
-        return await update.effective_message.reply_text("❌ <code>bot.json</code> not found.", parse_mode="HTML")
-    await dynamic_run(update, context, config.get('main_file', 'bot.py'))
+        return await update.message.reply_text("❌ No command provided and <code>bot.json</code> missing.", parse_mode="HTML")
+    
+    main_file = config.get('main_file', 'bot.py')
+    await dynamic_run(update, context, main_file)
+
+async def dynamic_run_raw(update, context, cmd, slug):
+    """Helper to run non-file shell commands."""
+    uid = update.effective_user.id
+    pid = f"{uid}_{slug}"
+    log_p = os.path.join(engine.get_user_base(uid), f"{pid}.log")
+    
+    proc = subprocess.Popen(cmd, shell=True, cwd=engine.get_user_base(uid), 
+                            stdout=open(log_p, "w"), stderr=subprocess.STDOUT)
+    running_processes[pid] = {"proc": proc, "slug": slug}
+    
+    text, markup = await get_logs_view(uid, slug)
+    await update.effective_message.reply_text(f"🛠 <b>Executing Task:</b> <code>{esc(cmd)}</code>\n\n{text}", 
+                                             reply_markup=markup, parse_mode="HTML")
 
 async def stop_cmd(update, context):
     """5. Logic for /stop: Terminates a specific process."""
