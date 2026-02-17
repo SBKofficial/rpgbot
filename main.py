@@ -262,13 +262,30 @@ async def deployments_cmd(update, context):
         await update.effective_message.reply_text(msg, reply_markup=InlineKeyboardMarkup(kb), parse_mode="HTML")
 
 async def send_cmd(update, context):
-    """8. STDIN input logic with newline."""
-    if len(context.args) < 2: return
-    pid = f"{update.effective_user.id}_{context.args[0]}"
-    if pid in running_processes:
-        running_processes[pid]['proc'].stdin.write(" ".join(context.args[1:]) + "\n")
-        running_processes[pid]['proc'].stdin.flush()
-        await update.message.reply_text("⌨️ Sent to terminal.")
+    """
+    8. STDIN input logic with newline.
+    Added error handling for closed pipes and input feedback.
+    """
+    if len(context.args) < 2:
+        return await update.message.reply_text("❌ Usage: <code>/send [slug] [text]</code>", parse_mode="HTML")
+    
+    slug = context.args[0]
+    input_text = " ".join(context.args[1:])
+    pid_key = f"{update.effective_user.id}_{slug}"
+
+    if pid_key in running_processes:
+        proc = running_processes[pid_key]['proc']
+        try:
+            # We add \n to simulate hitting 'Enter'
+            proc.stdin.write(input_text + "\n")
+            proc.stdin.flush()
+            await update.message.reply_text(f"⌨️ Sent <code>{esc(input_text)}</code> to terminal.", parse_mode="HTML")
+        except BrokenPipeError:
+            await update.message.reply_text("❌ <b>Error:</b> Terminal is no longer accepting input.")
+        except Exception as e:
+            await update.message.reply_text(f"⚠️ <b>Failed:</b> {esc(e)}")
+    else:
+        await update.message.reply_text(f"❌ No active process found for: <code>{esc(slug)}</code>", parse_mode="HTML")
 
 async def delete_cmd(update, context):
     """9. File deletion logic."""
@@ -285,31 +302,76 @@ async def delete_cmd(update, context):
 # --- All Button Callback Logics ---
 
 async def cb_handler(update, context):
-    query = update.callback_query; data = query.data; uid = query.from_user.id; await query.answer()
+    query = update.callback_query
+    data = query.data
+    uid = query.from_user.id
+    await query.answer()
+
+    if data == "nav_home": 
+        await start_cmd(update, context)
     
-    if data == "nav_home": await start_cmd(update, context)
-    elif data == "myfiles": await myfiles_cmd(update, context)
-    elif data == "view_deploys": await deployments_cmd(update, context)
+    elif data == "myfiles": 
+        await myfiles_cmd(update, context)
     
-    elif data.startswith("fopt_"): # CLICKED A FILE NAME
+    elif data == "view_deploys": 
+        await deployments_cmd(update, context)
+    
+    elif data.startswith("fopt_"): 
         fname = data.replace("fopt_", "")
-        kb = [[InlineKeyboardButton("▶️ Run", callback_data=f"qrun_{fname}")],
-              [InlineKeyboardButton("📋 Logs", callback_data=f"logref_{fname.split('.')[0]}"), 
-               InlineKeyboardButton("🗑 Delete", callback_data=f"fdel_{fname}")],
-              [InlineKeyboardButton("⬅️ Back", callback_data="myfiles")]]
-        await query.edit_message_text(f"📄 <b>File:</b> <code>{esc(fname)}</code>", reply_markup=InlineKeyboardMarkup(kb), parse_mode="HTML")
+        slug = fname.split('.')[0]
+        
+        # Build the dynamic keyboard
+        row1 = [InlineKeyboardButton("▶️ Run", callback_data=f"qrun_{fname}")]
+        
+        # 1. ADDED: Specific button for requirements.txt
+        if fname == "requirements.txt":
+            row1.append(InlineKeyboardButton("📦 Install Deps", callback_data="inst_deps"))
+            
+        kb = [
+            row1,
+            [InlineKeyboardButton("📋 Logs", callback_data=f"logref_{slug}"), 
+             InlineKeyboardButton("🗑 Delete", callback_data=f"fdel_{fname}")],
+            [InlineKeyboardButton("⬅️ Back", callback_data="myfiles")]
+        ]
+        await query.edit_message_text(
+            f"📄 <b>File:</b> <code>{esc(fname)}</code>", 
+            reply_markup=InlineKeyboardMarkup(kb), 
+            parse_mode="HTML"
+        )
 
-    elif data.startswith("qrun_"): # RUN BUTTON
-        f = data.replace("qrun_", ""); cmd = f"node {f}" if f.endswith(".js") else f"{engine.get_venv_exe(uid)} {f}"
-        await execute_shell(update, context, cmd, f.split('.')[0])
+    elif data == "inst_deps":
+        # 2. ADDED: Logic to install requirements in the Venv
+        pip_path = engine.get_venv_exe(uid).replace("python3", "pip")
+        await execute_shell(update, context, f"{pip_path} install -r requirements.txt", "pip_install")
 
-    elif data.startswith("logref_"): # REFRESH LOGS
-        text, markup = await get_logs_view(uid, data.replace("logref_", ""))
-        try: await query.edit_message_text(text, reply_markup=markup, parse_mode="HTML")
-        except BadRequest: pass
+    elif data.startswith("qrun_"): 
+        fname = data.replace("qrun_", "")
+        slug = fname.split('.')[0]
+        
+        # Choose runner based on extension
+        if fname.endswith(".js"):
+            cmd = f"node {fname}"
+        elif fname.endswith(".py"):
+            cmd = f"{engine.get_venv_exe(uid)} {fname}"
+        else:
+            cmd = f"bash {fname}" # Default for .sh or extensionless files
+            
+        await execute_shell(update, context, cmd, slug)
 
-    elif data.startswith("stop_"): await stop_cmd(update, context)
-    elif data.startswith("fdel_"): await delete_cmd(update, context)
+    elif data.startswith("logref_"): 
+        slug = data.replace("logref_", "")
+        text, markup = await get_logs_view(uid, slug)
+        try: 
+            await query.edit_message_text(text, reply_markup=markup, parse_mode="HTML")
+        except BadRequest: 
+            pass # Message is identical, ignore
+
+    elif data.startswith("stop_"): 
+        await stop_cmd(update, context)
+        
+    elif data.startswith("fdel_"): 
+        await delete_cmd(update, context)
+
 
 if __name__ == '__main__':
     app = ApplicationBuilder().token(BOT_TOKEN).post_init(post_init).build()
