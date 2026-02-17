@@ -2,19 +2,58 @@ import os, subprocess, shutil, json, logging
 
 class LabEngine:
     def __init__(self, root_dir="bot_lab"):
+        # We use absolute paths to ensure consistency across restarts
         self.root_dir = os.path.abspath(root_dir)
         os.makedirs(self.root_dir, exist_ok=True)
-        # Ensure your GIT_TOKEN is set in your environment variables
+        # Ensure your GIT_TOKEN is set as an Environment Variable
         self.git_token = os.getenv("GIT_TOKEN")
-        
-        # --- CONFIGURATION: YOUR MAIN REPO ---
-        # Replace this with your actual repository URL
+        # Your Master Repository
         self.main_repo_url = "https://github.com/SBKofficial/rpgbot.git"
 
     def get_user_base(self, uid):
+        """Returns the absolute path to a user's workspace."""
         path = os.path.join(self.root_dir, str(uid))
         os.makedirs(path, exist_ok=True)
         return path
+
+    def sync_from_github(self, uid):
+        """
+        CRITICAL: Recovers files from GitHub. 
+        Checks if the user's branch exists and clones/pulls it.
+        """
+        path = self.get_user_base(uid)
+        branch = f"user_{uid}"
+        
+        # Build Authenticated URL
+        if self.git_token:
+            auth_url = self.main_repo_url.replace("https://", f"https://{self.git_token}@")
+        else:
+            auth_url = self.main_repo_url
+
+        try:
+            # If .git doesn't exist, we need to clone or initialize
+            if not os.path.exists(os.path.join(path, ".git")):
+                # Attempt to clone the specific user branch
+                res = subprocess.run(
+                    ["git", "clone", "-b", branch, auth_url, "."], 
+                    cwd=path, capture_output=True, text=True
+                )
+                
+                if res.returncode != 0:
+                    # Branch doesn't exist yet (New User), so initialize locally
+                    subprocess.run(["git", "init"], cwd=path)
+                    subprocess.run(["git", "remote", "add", "origin", auth_url], cwd=path)
+                    subprocess.run(["git", "checkout", "-b", branch], cwd=path)
+                    return True, "🆕 New workspace initialized."
+                return True, "✅ Files recovered from GitHub."
+            
+            else:
+                # Local .git exists, just pull latest updates
+                subprocess.run(["git", "pull", "origin", branch], cwd=path)
+                return True, "🔄 Synced with latest cloud changes."
+                
+        except Exception as e:
+            return False, f"Sync Error: {str(e)}"
 
     def setup_venv(self, uid):
         user_path = self.get_user_base(uid)
@@ -28,58 +67,32 @@ class LabEngine:
 
     def read_config(self, uid):
         path = os.path.join(self.get_user_base(uid), "bot.json")
-        try:
-            if os.path.exists(path):
+        if os.path.exists(path):
+            try:
                 with open(path, "r") as f: return json.load(f)
-        except: return None
+            except: return None
         return None
 
-    def save_config(self, uid, config):
-        path = os.path.join(self.get_user_base(uid), "bot.json")
-        with open(path, "w") as f:
-            json.dump(config, f, indent=4)
-
     def git_push_file(self, uid, filename):
-        """
-        Connects the local user folder to the main repo and pushes 
-        the file to a user-specific branch.
-        """
+        """Saves a file locally, then pushes it to the user's branch."""
         path = self.get_user_base(uid)
         branch = f"user_{uid}"
-        
+
         try:
-            # 1. Initialize local git if it doesn't exist
-            if not os.path.exists(os.path.join(path, ".git")):
-                subprocess.run(["git", "init"], cwd=path)
-
-            # 2. Add 'origin' pointing to your main repo with PAT authentication
-            remotes = subprocess.run(["git", "remote"], cwd=path, capture_output=True, text=True).stdout
-            if "origin" not in remotes:
-                if self.git_token:
-                    # Authenticate the URL so it doesn't ask for a password
-                    auth_url = self.main_repo_url.replace("https://", f"https://{self.git_token}@")
-                else:
-                    auth_url = self.main_repo_url
-                
-                subprocess.run(["git", "remote", "add", "origin", auth_url], cwd=path)
-
-            # 3. Identity setup (required for commits)
+            # 1. Identity setup (required after server restart)
             subprocess.run('git config user.email "bot@lab.com"', shell=True, cwd=path)
             subprocess.run('git config user.name "LabManager"', shell=True, cwd=path)
-            
-            # 4. Create and switch to the user's unique branch
-            # We use checkout -B to force create/reset to a clean branch state
-            subprocess.run(["git", "checkout", "-B", branch], cwd=path, capture_output=True)
-            
-            # 5. Stage, Commit, and Push
+
+            # 2. Commit logic
             subprocess.run(["git", "add", filename], cwd=path)
-            subprocess.run(["git", "commit", "-m", f"Upload from user {uid}: {filename}"], cwd=path)
-            
-            # -u origin {branch} sets the upstream so future pushes are easier
-            res = subprocess.run(["git", "push", "-u", "origin", branch, "--force"], cwd=path, capture_output=True, text=True)
-            
+            # --allow-empty prevents errors if nothing changed
+            subprocess.run(["git", "commit", "-m", f"Update {filename}", "--allow-empty"], cwd=path)
+
+            # 3. Push to GitHub
+            res = subprocess.run(["git", "push", "origin", branch], cwd=path, capture_output=True, text=True)
+
             if res.returncode == 0:
-                return True, "Successfully pushed to branch"
+                return True, "Cloud Sync Successful"
             else:
                 return False, res.stderr
 
