@@ -202,24 +202,52 @@ async def upload_cmd(update, context):
 
 
 async def stop_cmd(update, context):
-    """5. Kill process logic."""
+    """
+    5. Kill process logic.
+    Uses Process Group termination to ensure child processes (bots) die with the shell.
+    """
+    # Identify the slug from either arguments or callback data
     slug = context.args[0] if context.args else update.callback_query.data.replace("stop_", "") if update.callback_query else None
-    if not slug: return
-    pid = f"{update.effective_user.id}_{slug}"
-    if pid in running_processes:
-        running_processes[pid]['proc'].terminate(); del running_processes[pid]
-        msg = f"🛑 Stopped: <code>{esc(slug)}</code>"
-    else: msg = "❌ Process not found."
+    if not slug: 
+        return
+        
+    pid_key = f"{update.effective_user.id}_{slug}"
+    
+    if pid_key in running_processes:
+        proc_data = running_processes[pid_key]
+        # Use the engine's group-kill method
+        success = engine.kill_subprocess(proc_data['proc'])
+        
+        if success:
+            del running_processes[pid_key]
+            msg = f"🛑 <b>Fully Terminated:</b> <code>{esc(slug)}</code>\nAll child processes cleared."
+        else:
+            msg = f"⚠️ <b>Partial Stop:</b> Failed to clear process group for <code>{esc(slug)}</code>."
+    else:
+        msg = "❌ <b>Process Not Found:</b> It may have already crashed or stopped."
+    
+    # Navigation button to get back to safety
+    kb = InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Home", callback_data="nav_home")]])
     
     if update.callback_query:
-        await update.callback_query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Home", callback_data="nav_home")]]), parse_mode="HTML")
+        await update.callback_query.edit_message_text(msg, reply_markup=kb, parse_mode="HTML")
     else:
-        await update.effective_message.reply_text(msg, parse_mode="HTML")
+        await update.effective_message.reply_text(msg, reply_markup=kb, parse_mode="HTML")
 
 async def logs_cmd(update, context):
-    """6. Log viewer logic."""
-    if not context.args: return
-    text, markup = await get_logs_view(update.effective_user.id, context.args[0])
+    """
+    6. Log viewer logic.
+    Now pulls the high-fidelity tail view (last 3800 characters).
+    """
+    if not context.args:
+        return await update.effective_message.reply_text("❌ Usage: <code>/logs [slug]</code>", parse_mode="HTML")
+    
+    slug = context.args[0]
+    uid = update.effective_user.id
+    
+    # Get the detailed view using the new 'seek' logic in get_logs_view
+    text, markup = await get_logs_view(uid, slug)
+    
     await update.effective_message.reply_text(text, reply_markup=markup, parse_mode="HTML")
 
 async def deployments_cmd(update, context):
