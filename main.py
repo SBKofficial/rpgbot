@@ -289,17 +289,26 @@ async def send_cmd(update, context):
         await update.message.reply_text(f"❌ No active process found for: <code>{esc(slug)}</code>", parse_mode="HTML")
 
 async def delete_cmd(update, context):
-    """9. File deletion logic."""
+    """9. File deletion logic with Git Sync."""
+    uid = update.effective_user.id
     fname = context.args[0] if context.args else update.callback_query.data.replace("fdel_", "") if update.callback_query else None
     if not fname: return
-    path = os.path.join(engine.get_user_base(update.effective_user.id), fname)
-    if os.path.exists(path): os.remove(path)
-    msg = f"🗑 Deleted: <code>{esc(fname)}</code>"
-    if update.callback_query:
-        await update.callback_query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Home", callback_data="nav_home")]]), parse_mode="HTML")
+    
+    path = os.path.join(engine.get_user_base(uid), fname)
+    
+    if os.path.exists(path):
+        os.remove(path) # Delete locally
+        success, git_msg = engine.git_delete_file(uid, fname) # Delete from GitHub
+        msg = f"🗑 <b>Deleted:</b> <code>{esc(fname)}</code>\n📡 <b>Cloud:</b> {esc(git_msg)}"
     else:
-        await update.effective_message.reply_text(msg, parse_mode="HTML")
+        msg = "❌ File not found."
 
+    kb = InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Home", callback_data="nav_home")]])
+    if update.callback_query:
+        await update.callback_query.edit_message_text(msg, reply_markup=kb, parse_mode="HTML")
+    else:
+        await update.effective_message.reply_text(msg, reply_markup=kb, parse_mode="HTML")
+        
 # Place this near your other command functions (like start_cmd or run_cmd)
 async def admin_wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Bridge to the admin monitoring logic."""
