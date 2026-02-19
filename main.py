@@ -417,7 +417,7 @@ if __name__ == '__main__':
         CommandHandler("start", start_cmd), CommandHandler("myfiles", myfiles_cmd),
         CommandHandler("upload", upload_cmd), CommandHandler("run", run_cmd),
         CommandHandler("stop", stop_cmd), CommandHandler("logs", logs_cmd),
-        CommandHandler("admin_stats", admin_wrapper),
+        CommandHandler("admin_stats", admin_wrapper),CommandHandler("killall", killall_cmd),
         CommandHandler("deployments", deployments_cmd), CommandHandler("send", send_cmd),
         CommandHandler("delete", delete_cmd), CallbackQueryHandler(cb_handler)
     ]
