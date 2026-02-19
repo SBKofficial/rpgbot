@@ -1,4 +1,4 @@
---- START OF FILE engine.py ---
+
 import os, subprocess, shutil, json, logging, signal, resource
 
 class LabEngine:
@@ -113,3 +113,15 @@ class LabEngine:
             return True
         except:
             return False
+
+    def git_delete_file(self, uid, filename):
+        path = self.get_user_base(uid)
+        branch = f"user_{uid}"
+        try:
+            # Tell git to remove the file
+            subprocess.run(["git", "rm", filename], cwd=path)
+            subprocess.run(["git", "commit", "-m", f"Delete {filename}"], cwd=path)
+            res = subprocess.run(["git", "push", "origin", branch], cwd=path, capture_output=True, text=True)
+            return True, "Permanently removed from cloud."
+        except Exception as e:
+            return False, str(e)
