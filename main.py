@@ -308,7 +308,28 @@ async def delete_cmd(update, context):
         await update.callback_query.edit_message_text(msg, reply_markup=kb, parse_mode="HTML")
     else:
         await update.effective_message.reply_text(msg, reply_markup=kb, parse_mode="HTML")
-        
+
+async def killall_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin-only: Kills every single user-hosted process instantly."""
+    if update.effective_user.id != ADMIN_ID:
+        return await update.message.reply_text("⛔ <b>Access Denied.</b>", parse_mode="HTML")
+
+    # 1. Run a system command to kill all user-related processes
+    # This targets Python, Node, and Bash (the runners)
+    # It excludes the process ID of the main bot so it doesn't kill itself
+    main_pid = os.getpid()
+    os.system(f"pkill -u $(whoami) -f 'python3|node|bash' --exclude {main_pid}")
+
+    # 2. Clear the tracking dictionary so the /deployments list is empty
+    running_processes.clear()
+
+    await update.message.reply_text(
+        "☢️ <b>EMERGENCY STOP EXECUTED</b>\n"
+        "All user processes have been terminated and cleared from memory.", 
+        parse_mode="HTML"
+    )
+
+
 # Place this near your other command functions (like start_cmd or run_cmd)
 async def admin_wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Bridge to the admin monitoring logic."""
