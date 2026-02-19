@@ -50,3 +50,12 @@ async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE, runnin
                 stats_msg += f"❌ <b>{esc(slug)}</b>: <i>Process unresponsive.</i>\n"
 
     await update.message.reply_text(stats_msg, parse_mode="HTML")
+
+async def emergency_stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Kills every single user process running on the VPS."""
+    if update.effective_user.id != ADMIN_ID: return
+    
+    # This Linux command kills all processes started by the bot's children
+    os.system("pkill -u $(whoami) -f 'python3|node|bash'") 
+    await update.message.reply_text("☢️ <b>EMERGENCY STOP EXECUTED</b>\nAll user processes have been terminated.")
+
