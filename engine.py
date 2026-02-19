@@ -1,4 +1,5 @@
-import os, subprocess, shutil, json, logging, signal
+--- START OF FILE engine.py ---
+import os, subprocess, shutil, json, logging, signal, resource
 
 class LabEngine:
     def __init__(self, root_dir="bot_lab"):
@@ -62,9 +63,36 @@ class LabEngine:
         except Exception as e:
             return False, str(e)
 
-    # --- NEW: PERSISTENT PROCESS EXECUTION ---
+    # --- HARDENED RESOURCE GOVERNOR ---
+    
+    def _apply_limits(self):
+        """This function runs inside the subprocess right before the script starts."""
+        # 1. RAM Limit: 256MB (Soft and Hard limit)
+        mem_limit = 256 * 1024 * 1024 
+        resource.setrlimit(resource.RLIMIT_AS, (mem_limit, mem_limit))
+
+        # 2. Disk Limit: 50MB max file size
+        file_limit = 50 * 1024 * 1024
+        resource.setrlimit(resource.RLIMIT_FSIZE, (file_limit, file_limit))
+
+        # 3. CPU Priority: 19 is the lowest priority (very 'nice' to the host)
+        os.nice(19)
+
+        # 4. Create a new process group to allow killing children later
+        os.setsid()
+
     def start_subprocess(self, cmd, user_path, log_path):
-        """Starts a process in a new session to allow clean termination of children."""
+        """Starts a process with environment scrubbing and resource limits."""
+        
+        # 5. Environment Scrubbing: Only give the child basic system paths.
+        # This HIDES your BOT_TOKEN and GIT_TOKEN from the user's script.
+        safe_env = {
+            "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+            "HOME": user_path,
+            "LANG": "en_US.UTF-8",
+            "PYTHONUNBUFFERED": "1"
+        }
+
         return subprocess.Popen(
             cmd, 
             shell=True, 
@@ -72,9 +100,10 @@ class LabEngine:
             stdout=open(log_path, "w"), 
             stderr=subprocess.STDOUT, 
             stdin=subprocess.PIPE, 
+            env=safe_env,         # Apply the clean environment
+            preexec_fn=self._apply_limits, # Apply RAM/CPU/Disk limits
             text=True, 
-            bufsize=1, # Line buffering for real-time logs
-            preexec_fn=os.setsid # Create process group
+            bufsize=1
         )
 
     def kill_subprocess(self, proc):
