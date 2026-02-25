@@ -68,7 +68,7 @@ class LabEngine:
     def _apply_limits(self):
         """This function runs inside the subprocess right before the script starts."""
         # 1. RAM Limit: 256MB (Soft and Hard limit)
-        mem_limit = 256 * 1024 * 1024 
+        mem_limit = 512 * 1024 * 1024 
         resource.setrlimit(resource.RLIMIT_AS, (mem_limit, mem_limit))
 
         # 2. Disk Limit: 50MB max file size
