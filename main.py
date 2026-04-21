@@ -115,6 +115,7 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Welcome! I am your persistent cloud terminal. Use the commands below to manage your projects:\n\n"
         "📑 <b>COMMAND MANUAL</b>\n"
         "• /start - Reset and view this manual\n"
+        "• /project - Create or switch project\n"
         "• /myfiles - View your recovered files and manage them\n"
         "• /upload [name] - Save a file and <b>Sync to GitHub</b>\n"
         "• /run [cmd] - Execute <code>npm</code>, <code>pip</code>, or <code>bot.json</code>\n"
@@ -431,7 +432,7 @@ if __name__ == '__main__':
     
     # Mapping all handlers
     handlers = [
-        CommandHandler("start", start_cmd), CommandHandler("myfiles", myfiles_cmd),
+        CommandHandler("start", start_cmd), CommandHandler("myfiles", myfiles_cmd),CommandHandler("project", project_cmd),
         CommandHandler("upload", upload_cmd), CommandHandler("run", run_cmd),
         CommandHandler("stop", stop_cmd), CommandHandler("logs", logs_cmd),
         CommandHandler("admin_stats", admin_wrapper),CommandHandler("killall", killall_cmd),
