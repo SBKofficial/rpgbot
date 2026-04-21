@@ -487,15 +487,28 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 if __name__ == '__main__':
     app = ApplicationBuilder().token(BOT_TOKEN).post_init(post_init).build()
-    
-    # Mapping all handlers
+
+    # Mapping all handlers cleanly
     handlers = [
-        CommandHandler("start", start_cmd), CommandHandler("myfiles", myfiles_cmd),CommandHandler("project", project_cmd),
-        CommandHandler("upload", upload_cmd), CommandHandler("run", run_cmd),
-        CommandHandler("stop", stop_cmd), CommandHandler("logs", logs_cmd),
-        CommandHandler("admin_stats", admin_wrapper),CommandHandler("killall", killall_cmd),
-        CommandHandler("deployments", deployments_cmd), CommandHandler("send", send_cmd),
-        CommandHandler("delete", delete_cmd), CallbackQueryHandler(cb_handler), app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))]
-    for h in handlers: app.add_handler(h)
+        CommandHandler("start", start_cmd), 
+        CommandHandler("project", project_cmd),      # <-- The new project command
+        CommandHandler("myfiles", myfiles_cmd),
+        CommandHandler("upload", upload_cmd), 
+        CommandHandler("run", run_cmd),
+        CommandHandler("stop", stop_cmd), 
+        CommandHandler("logs", logs_cmd),
+        CommandHandler("admin_stats", admin_wrapper),
+        CommandHandler("killall", killall_cmd),
+        CommandHandler("deployments", deployments_cmd), 
+        CommandHandler("send", send_cmd),
+        CommandHandler("delete", delete_cmd), 
+        CallbackQueryHandler(cb_handler),
+        
+        # <-- The new MessageHandler to catch typed project names
+        MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler) 
+    ]
     
+    for h in handlers: 
+        app.add_handler(h)
+
     app.run_polling()
