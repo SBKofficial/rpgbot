@@ -158,50 +158,46 @@ async def run_cmd(update, context):
     await execute_shell(update, context, raw_cmd, "terminal")
 
 async def myfiles_cmd(update, context):
-    """3. File Explorer Logic."""
     uid = update.effective_user.id
-    files = [f for f in os.listdir(engine.get_user_base(uid)) if f not in ["venv", ".git"] and not f.endswith(".log")]
+    current_proj = active_projects.get(uid, "default")
+    project_path = engine.get_project_path(uid, current_proj)
+    
+    try:
+        files = [f for f in os.listdir(project_path) if os.path.isfile(os.path.join(project_path, f))]
+    except FileNotFoundError:
+        files = []
+
     kb = [[InlineKeyboardButton(f"📄 {f}", callback_data=f"fopt_{f}")] for f in sorted(files)]
     kb.append([InlineKeyboardButton("🏠 Home", callback_data="nav_home")])
-    
+
+    msg = f"📂 <b>Project Files:</b> <code>{esc(current_proj)}</code>"
     if update.callback_query:
-        await update.callback_query.edit_message_text("📂 <b>Files:</b>", reply_markup=InlineKeyboardMarkup(kb), parse_mode="HTML")
+        await update.callback_query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(kb), parse_mode="HTML")
     else:
-        await update.effective_message.reply_text("📂 <b>Files:</b>", reply_markup=InlineKeyboardMarkup(kb), parse_mode="HTML")
+        await update.effective_message.reply_text(msg, reply_markup=InlineKeyboardMarkup(kb), parse_mode="HTML")
 
 async def upload_cmd(update, context):
-    """4. Upload logic with immediate GitHub Sync."""
     if not update.message.reply_to_message or not context.args:
         return await update.message.reply_text("❌ Reply to a file with: <code>/upload name.py</code>", parse_mode="HTML")
-    
+
     uid, fname = update.effective_user.id, context.args[0]
-    user_path = engine.get_user_base(uid)
-    local_path = os.path.join(user_path, fname)
-    
-    # 1. Download from Telegram
+    current_proj = active_projects.get(uid, "default")
+    local_path = os.path.join(engine.get_project_path(uid, current_proj), fname)
+
     replied = update.message.reply_to_message
     content = (await (await replied.document.get_file()).download_as_bytearray()) if replied.document else replied.text.encode()
-    
+
     with open(local_path, "wb") as f: 
         f.write(content)
-    
-    # 2. Sync to GitHub immediately
-    success, git_log = engine.git_push_file(uid, fname)
-    
+
+    success, git_log = engine.git_push_file(uid, current_proj, fname)
     if success:
         await update.message.reply_text(
-            f"✅ <b>Saved & Synced!</b>\n"
-            f"📄 File: <code>{esc(fname)}</code>\n"
-            f"🛰 Status: <code>{esc(git_log)}</code>", 
+            f"✅ <b>Saved & Synced!</b>\n📁 Project: <code>{esc(current_proj)}</code>\n📄 File: <code>{esc(fname)}</code>", 
             parse_mode="HTML"
         )
     else:
-        await update.message.reply_text(
-            f"⚠️ <b>Saved locally, but Git Sync failed:</b>\n"
-            f"<blockquote><code>{esc(git_log)}</code></blockquote>", 
-            parse_mode="HTML"
-        )
-
+        await update.message.reply_text(f"⚠️ <b>Git Sync failed:</b>\n<blockquote><code>{esc(git_log)}</code></blockquote>", parse_mode="HTML")
 
 async def stop_cmd(update, context):
     """
