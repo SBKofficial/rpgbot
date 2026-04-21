@@ -24,6 +24,7 @@ async def post_init(application):
         BotCommand("start", "Manual and Introduction"),
         BotCommand("myfiles", "File explorer & actions"),
         BotCommand("upload", "Save & push file to GitHub"),
+       BotCommand("project", "Switch or create a project folder"),
         BotCommand("run", "Start bot from bot.json or command"),
         BotCommand("stop", "Kill a running process"),
         BotCommand("logs", "View blockquote logs"),
