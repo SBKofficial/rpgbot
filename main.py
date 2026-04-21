@@ -495,8 +495,7 @@ if __name__ == '__main__':
         CommandHandler("stop", stop_cmd), CommandHandler("logs", logs_cmd),
         CommandHandler("admin_stats", admin_wrapper),CommandHandler("killall", killall_cmd),
         CommandHandler("deployments", deployments_cmd), CommandHandler("send", send_cmd),
-        CommandHandler("delete", delete_cmd), CallbackQueryHandler(cb_handler)
-    ]
+        CommandHandler("delete", delete_cmd), CallbackQueryHandler(cb_handler), app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))]
     for h in handlers: app.add_handler(h)
     
     app.run_polling()
