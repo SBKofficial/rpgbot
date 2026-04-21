@@ -1,6 +1,6 @@
 import os, subprocess, logging, html, json
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand
-from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes
+from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes, MessageHandler, filters
 from telegram.error import BadRequest
 from engine import LabEngine
 from admin import admin_stats, ADMIN_ID
@@ -10,7 +10,7 @@ engine = LabEngine()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 running_processes = {} # { pid: {proc, slug} }
 active_projects = {}   # { uid: "project_name" }  
-
+user_state = {}        # { uid: "WAITING_FOR_PROJECT_NAME" }
 
 logging.basicConfig(level=logging.INFO)
 
@@ -287,21 +287,22 @@ async def send_cmd(update, context):
         await update.message.reply_text(f"❌ No active process found for: <code>{esc(slug)}</code>", parse_mode="HTML")
 
 async def delete_cmd(update, context):
-    """9. File deletion logic with Git Sync."""
+    """9. File deletion logic mapped to the active project."""
     uid = update.effective_user.id
     fname = context.args[0] if context.args else update.callback_query.data.replace("fdel_", "") if update.callback_query else None
     if not fname: return
-    
-    path = os.path.join(engine.get_user_base(uid), fname)
-    
+
+    current_proj = active_projects.get(uid, "default")
+    path = os.path.join(engine.get_project_path(uid, current_proj), fname)
+
     if os.path.exists(path):
         os.remove(path) # Delete locally
-        success, git_msg = engine.git_delete_file(uid, fname) # Delete from GitHub
+        success, git_msg = engine.git_delete_file(uid, current_proj, fname) # Cloud delete
         msg = f"🗑 <b>Deleted:</b> <code>{esc(fname)}</code>\n📡 <b>Cloud:</b> {esc(git_msg)}"
     else:
         msg = "❌ File not found."
 
-    kb = InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Home", callback_data="nav_home")]])
+    kb = InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back to Files", callback_data="myfiles")]])
     if update.callback_query:
         await update.callback_query.edit_message_text(msg, reply_markup=kb, parse_mode="HTML")
     else:
@@ -365,7 +366,8 @@ async def cb_handler(update, context):
             row1,
             [InlineKeyboardButton("📋 Logs", callback_data=f"logref_{slug}"), 
              InlineKeyboardButton("🗑 Delete", callback_data=f"fdel_{fname}")],
-            [InlineKeyboardButton("⬅️ Back", callback_data="myfiles")]
+             [InlineKeyboardButton("⬇️ Download", callback_data=f"fdown_{fname}"),
+            InlineKeyboardButton("⬅️ Back", callback_data="myfiles")]
         ]
         await query.edit_message_text(
             f"📄 <b>File:</b> <code>{esc(fname)}</code>", 
@@ -406,25 +408,81 @@ async def cb_handler(update, context):
     elif data.startswith("fdel_"): 
         await delete_cmd(update, context)
 
-async def project_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid = update.effective_user.id
-    if not context.args:
-        current = active_projects.get(uid, "default")
-        return await update.message.reply_text(
-            f"📂 <b>Current Project:</b> <code>{esc(current)}</code>\n\n"
-            "<b>Usage:</b> <code>/project [name]</code> to switch or create a new one.",
+    elif data.startswith("setproj_"):
+        p_name = data.replace("setproj_", "")
+        active_projects[uid] = p_name
+        engine.get_project_path(uid, p_name) # Ensure folder exists
+        await query.answer(f"Switched to {p_name}")
+        await project_cmd(update, context) # Refresh the menu visually
+        
+    elif data == "new_proj":
+        user_state[uid] = "WAITING_FOR_PROJECT_NAME"
+        await query.edit_message_text(
+            "⌨️ <b>Send a name for your new project:</b>\n<i>(e.g. MyBot, no spaces)</i>", 
             parse_mode="HTML"
         )
+
+    elif data.startswith("fdown_"):
+        fname = data.replace("fdown_", "")
+        current_proj = active_projects.get(uid, "default")
+        path = os.path.join(engine.get_project_path(uid, current_proj), fname)
         
-    project_name = context.args[0]
-    active_projects[uid] = project_name
-    engine.get_project_path(uid, project_name) # Auto-creates folder if missing
+        if os.path.exists(path):
+            await query.answer("Sending file...")
+            await context.bot.send_document(chat_id=uid, document=open(path, "rb"))
+        else:
+            await query.answer("❌ File not found", show_alert=True)
+
+
+async def project_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Interactive Project Manager Menu."""
+    uid = update.effective_user.id
+    current = active_projects.get(uid, "default")
+    user_root = engine.get_user_root(uid)
+
+    # Scan the user's directory for project folders
+    projects = []
+    if os.path.exists(user_root):
+        for d in os.listdir(user_root):
+            if os.path.isdir(os.path.join(user_root, d)) and d not in ["venv", ".git"]:
+                projects.append(d)
     
-    await update.message.reply_text(
-        f"✅ <b>Switched to project:</b> <code>{esc(project_name)}</code>\n"
-        f"All uploads and runs will now happen inside this folder.",
-        parse_mode="HTML"
-    )
+    if "default" not in projects:
+        projects.append("default")
+
+    # Build the buttons
+    kb = []
+    for p in sorted(projects):
+        prefix = "✅ " if p == current else "📁 "
+        kb.append([InlineKeyboardButton(f"{prefix}{p}", callback_data=f"setproj_{p}")])
+    
+    kb.append([InlineKeyboardButton("➕ Create New Project", callback_data="new_proj")])
+    kb.append([InlineKeyboardButton("🏠 Home", callback_data="nav_home")])
+
+    msg = f"🗃 <b>Project Manager</b>\n\nActive Project: <code>{esc(current)}</code>\nSelect a project below to switch, or create a new one:"
+    
+    if update.callback_query:
+        await update.callback_query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(kb), parse_mode="HTML")
+    else:
+        await update.effective_message.reply_text(msg, reply_markup=InlineKeyboardMarkup(kb), parse_mode="HTML")
+
+async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Catches text input when the user is in a specific state."""
+    uid = update.effective_user.id
+    
+    # Check if they clicked "Create New Project"
+    if user_state.get(uid) == "WAITING_FOR_PROJECT_NAME":
+        p_name = update.message.text.strip().replace(" ", "_") # Make it a safe folder name
+        
+        active_projects[uid] = p_name
+        engine.get_project_path(uid, p_name) # Auto-creates the new folder
+        del user_state[uid] # Clear the state
+        
+        await update.message.reply_text(
+            f"✅ <b>Project Created & Active:</b> <code>{esc(p_name)}</code>\n"
+            "Use /upload to start adding files.", 
+            parse_mode="HTML"
+        )
 
 
 if __name__ == '__main__':
