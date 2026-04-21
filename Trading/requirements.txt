@@ -1,0 +1,5 @@
+pyTelegramBotAPI>=4.14.0
+yfinance>=0.2.36
+pandas>=2.0.0
+schedule>=1.2.0
+
