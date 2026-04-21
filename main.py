@@ -411,6 +411,26 @@ async def cb_handler(update, context):
     elif data.startswith("fdel_"): 
         await delete_cmd(update, context)
 
+async def project_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    if not context.args:
+        current = active_projects.get(uid, "default")
+        return await update.message.reply_text(
+            f"📂 <b>Current Project:</b> <code>{esc(current)}</code>\n\n"
+            "<b>Usage:</b> <code>/project [name]</code> to switch or create a new one.",
+            parse_mode="HTML"
+        )
+        
+    project_name = context.args[0]
+    active_projects[uid] = project_name
+    engine.get_project_path(uid, project_name) # Auto-creates folder if missing
+    
+    await update.message.reply_text(
+        f"✅ <b>Switched to project:</b> <code>{esc(project_name)}</code>\n"
+        f"All uploads and runs will now happen inside this folder.",
+        parse_mode="HTML"
+    )
+
 
 if __name__ == '__main__':
     app = ApplicationBuilder().token(BOT_TOKEN).post_init(post_init).build()
