@@ -37,33 +37,31 @@ async def post_init(application):
 # --- UI Helper: HTML Blockquote Logs ---
 
 async def execute_shell(update, context, cmd, slug):
-    """Handles hardened subprocess creation using Process Groups."""
     uid = update.effective_user.id
-    user_path = engine.get_user_base(uid)
+    project_name = active_projects.get(uid, "default")
+    
+    # Executions happen INSIDE the project folder
+    cwd_path = engine.get_project_path(uid, project_name)
+    user_root = engine.get_user_root(uid)
+    
     pid_key = f"{uid}_{slug}"
-    log_p = os.path.join(user_path, f"{pid_key}.log")
+    log_p = os.path.join(user_root, f"{pid_key}.log") # Keep logs at root level
 
-    # Clear old logs before starting
     open(log_p, 'w').close()
-
-    # Use the new engine method to start with os.setsid
-    proc = engine.start_subprocess(cmd, user_path, log_p)
-
+    proc = engine.start_subprocess(cmd, cwd_path, log_p, user_root)
     running_processes[pid_key] = {"proc": proc, "slug": slug}
 
-    # Fetch updated view
     text, markup = await get_logs_view(uid, slug)
-    msg = f"🚀 <b>Running:</b> <code>{esc(cmd)}</code>\n\n{text}"
+    msg = f"🚀 <b>Running:</b> <code>{esc(cmd)}</code>\n📁 <b>Project:</b> <code>{esc(project_name)}</code>\n\n{text}"
 
     if update.callback_query:
         await update.callback_query.edit_message_text(msg, reply_markup=markup, parse_mode="HTML")
     else:
         await update.effective_message.reply_text(msg, reply_markup=markup, parse_mode="HTML")
 
-
 async def get_logs_view(uid, slug):
     """Fetches the tail end of the log file without missing single lines."""
-    path = os.path.join(engine.get_user_base(uid), f"{uid}_{slug}.log")
+    path = os.path.join(engine.get_user_root(uid), f"{uid}_{slug}.log")
     log_content = "Waiting for terminal output..."
     
     if os.path.exists(path):
