@@ -9,6 +9,8 @@ from admin import admin_stats, ADMIN_ID
 engine = LabEngine()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 running_processes = {} # { pid: {proc, slug} }
+active_projects = {}   # { uid: "project_name" }  
+
 
 logging.basicConfig(level=logging.INFO)
 
