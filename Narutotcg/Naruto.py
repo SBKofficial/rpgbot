@@ -4,6 +4,7 @@ import requests
 import hashlib
 import unicodedata
 import json
+import re
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
 
@@ -14,6 +15,10 @@ SESSION_STRING = '1BVtsOHoBu6UrVWlKWytZo4dWB7FSrJ7Va5j-Xg7kVLTE3foejEoLbVzW1kr3k
 
 GAME_BOT_USERNAME = 'Naruto_tcg_bot'
 TARGET_GROUPS = [-1003923986174, -1003531986896] 
+
+# --- 🎰 BETTING CONFIG 🎰 ---
+BETTING_GROUP_ID = -1003531986896  # REPLACE THIS with the actual betting group ID!
+is_betting = False
 
 bot_stats = {
     "spawns_detected": 0,
@@ -38,6 +43,8 @@ def save_cache():
 
 client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
 
+# --- 🛠️ BASE COMMANDS 🛠️ ---
+
 @client.on(events.NewMessage(outgoing=True, pattern=r'(?i)^\.stop$'))
 async def stop_command(event):
     await event.edit("🛑 **Shutting down Shinobi Catcher...**")
@@ -55,7 +62,6 @@ async def stats_command(event):
     )
     await event.edit(stats_msg)
 
-# --- 🛠️ FIX NAME COMMAND 🛠️ ---
 @client.on(events.NewMessage(outgoing=True, pattern=r'(?i)^\.fixname (.*) \| (.*)'))
 async def fix_name_command(event):
     old_name = event.pattern_match.group(1).strip()
@@ -74,6 +80,54 @@ async def fix_name_command(event):
     else:
         await event.edit(f"⚠️ **Not Found:** Could not find `{old_name}` in the local cache.")
 
+# --- 🎰 BETTING COMMANDS & LOOP 🎰 ---
+
+@client.on(events.NewMessage(outgoing=True, pattern=r'(?i)^\.betting$'))
+async def start_betting_command(event):
+    global is_betting
+    is_betting = True
+    await event.edit("🎰 **Betting Loop Started!** Fetching initial balance...")
+    print("🎰 Betting started! Sending /shinobi_coins...")
+    
+    await client.send_message(BETTING_GROUP_ID, '/shinobi_coins')
+
+@client.on(events.NewMessage(outgoing=True, pattern=r'(?i)^\.enough$'))
+async def stop_betting_command(event):
+    global is_betting
+    is_betting = False
+    await event.edit("🛑 **Betting Loop Stopped.**")
+    print("🛑 Betting loop manually halted.")
+
+@client.on(events.NewMessage(chats=BETTING_GROUP_ID, from_users=GAME_BOT_USERNAME))
+async def auto_better(event):
+    global is_betting
+    
+    if not is_betting:
+        return
+
+    text = event.raw_text
+    
+    match = re.search(r'(?:Balance|Remaining):\s*([\d,]+)\s*coins', text, re.IGNORECASE)
+    
+    if match:
+        current_balance = int(match.group(1).replace(',', ''))
+        bet_amount = current_balance // 2
+        
+        if bet_amount > 0:
+            print(f"💰 Balance detected: {current_balance}. Betting {bet_amount}...")
+            await asyncio.sleep(2) 
+            
+            bet_command = f'/bet {bet_amount} h'
+            await client.send_message(BETTING_GROUP_ID, bet_command)
+            print(f"🎰 Sent: {bet_command}")
+            
+        else:
+            is_betting = False
+            print("🛑 Balance is too low to continue halving. Auto-stopping the betting loop.")
+            await client.send_message(BETTING_GROUP_ID, "🛑 Balance too low. Betting loop stopped.")
+
+# --- 🍥 SHINOBI CATCHER 🍥 ---
+
 @client.on(events.NewMessage(chats=TARGET_GROUPS, from_users=GAME_BOT_USERNAME))
 async def shinobi_catcher(event):
     if 'ᴀ sʜɪɴᴏʙɪ ʜᴀs ᴀᴘᴘᴇᴀʀᴇᴅ!' in event.raw_text:
@@ -87,7 +141,7 @@ async def shinobi_catcher(event):
         if event.message.media:
             image_path = await event.download_media(file="shinobi_spawn.jpg")
             try:
-                # 1. Generate MD5 hash for the downloaded image
+                # 1. Generate MD5 hash
                 with open(image_path, 'rb') as f:
                     image_bytes = f.read()
                 img_hash = hashlib.md5(image_bytes).hexdigest()
@@ -95,10 +149,7 @@ async def shinobi_catcher(event):
                 # 2. Check memory cache first
                 if img_hash in image_cache:
                     full_shinobi_name = image_cache[img_hash]
-                    
-                    # --- NEW: Extract first name from cached full name ---
                     first_name = full_shinobi_name.split()[0] if full_shinobi_name else ""
-                    # -----------------------------------------------------
                     
                     bot_stats["cache_hits"] += 1
                     print(f"⚡ Image recognized! Full Name: '{full_shinobi_name}'. Skipping OCR.")
@@ -110,7 +161,7 @@ async def shinobi_catcher(event):
                         print(f"✅ Successfully Sent: {catch_command} to [{chat_title}]")
                     
                 else:
-                    # 3. If unknown, use OCR API
+                    # 3. Use OCR API
                     print("🔍 New image! Sending to OCR API...")
                     with open(image_path, 'rb') as f:
                         payload = {
@@ -135,13 +186,8 @@ async def shinobi_catcher(event):
                         if valid_lines:
                             raw_name = valid_lines[0]
                             
-                            # Normalizes text (e.g., Kisäme -> Kisame)
                             clean_name = unicodedata.normalize('NFKD', raw_name).encode('ASCII', 'ignore').decode('utf-8')
-                            
-                            # The full, clean name to save to the database
                             full_name = "".join(c for c in clean_name if c.isalpha() or c.isspace()).title().strip()
-                            
-                            # The first name only, to use for the catch command
                             first_name = full_name.split()[0] if full_name else ""
                             
                             if first_name:
@@ -150,11 +196,9 @@ async def shinobi_catcher(event):
                                 bot_stats["catch_attempts"] += 1
                                 print(f"✅ Successfully Sent: {catch_command} to [{chat_title}]")
                                 
-                                # --- NEW: Save the FULL name to cache ---
                                 image_cache[img_hash] = full_name
                                 save_cache()
                                 print(f"💾 Saved full name '{full_name}' to local cache.")
-                                # ----------------------------------------
                             else:
                                 print("❌ Name extraction resulted in empty string.")
                             
@@ -175,8 +219,8 @@ async def shinobi_catcher(event):
 print("Connecting to Telegram...")
 client.start()
 
-print("✅ Bot running! Caching FULL names, catching with FIRST names.")
-print(f"✅ Monitoring {len(TARGET_GROUPS)} groups.")
+print("✅ Bot running! Catcher, Cache, and Auto-Betting enabled.")
+print(f"✅ Monitoring {len(TARGET_GROUPS)} groups for spawns.")
 try:
     client.run_until_disconnected()
 except Exception as e:
