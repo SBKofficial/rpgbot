@@ -1,5 +1,9 @@
 import io
+import cv2
+import numpy as np
+
 from PIL import Image
+
 from telegram import Update
 from telegram.ext import (
     Application,
@@ -10,40 +14,6 @@ from telegram.ext import (
 )
 
 BOT_TOKEN = '8341690614:AAEEzCkF7CJ5cHPH0K1cnLwpJclgeqvtlqM'
-
-
-def get_color_signature(img, cx, cy, radius):
-    crop = img.crop((
-        int(cx - radius),
-        int(cy - radius),
-        int(cx + radius),
-        int(cy + radius)
-    ))
-
-    colors = crop.getcolors(crop.size[0] * crop.size[1])
-
-    if not colors:
-        return {}
-
-    colors.sort(reverse=True, key=lambda x: x[0])
-
-    bg_color = colors[0][1]
-
-    signature = {}
-
-    for count, color in colors:
-        if sum(abs(a - b) for a, b in zip(color, bg_color)) < 40:
-            continue
-
-        q_color = (
-            color[0] // 16,
-            color[1] // 16,
-            color[2] // 16
-        )
-
-        signature[q_color] = signature.get(q_color, 0) + count
-
-    return signature
 
 
 async def solve_image(image_bytes):
@@ -65,87 +35,156 @@ async def solve_image(image_bytes):
 
     crop_radius = int(w * 0.10)
 
-    top_sig = get_color_signature(
-        img,
+    def crop_region(cx, cy):
+        return img.crop((
+            int(cx - crop_radius),
+            int(cy - crop_radius),
+            int(cx + crop_radius),
+            int(cy + crop_radius)
+        ))
+
+    # TOP IMAGE
+    top_crop = crop_region(
         centers['top'][0],
-        centers['top'][1],
-        crop_radius
+        centers['top'][1]
+    )
+
+    top_cv = cv2.cvtColor(
+        np.array(top_crop),
+        cv2.COLOR_RGB2GRAY
+    )
+
+    orb = cv2.ORB_create(nfeatures=500)
+
+    kp1, des1 = orb.detectAndCompute(top_cv, None)
+
+    if des1 is None:
+        return {
+            "answer": None,
+            "safe": False,
+            "score": 0,
+            "all_scores": {}
+        }
+
+    bf = cv2.BFMatcher(
+        cv2.NORM_HAMMING,
+        crossCheck=True
     )
 
     best_match = None
-    lowest_penalty = float('inf')
+    best_score = -1
 
-    penalties = {}
+    scores = {}
 
     for i in range(1, 7):
-        opt_sig = get_color_signature(
-            img,
+
+        option_crop = crop_region(
             centers[i][0],
-            centers[i][1],
-            crop_radius
+            centers[i][1]
         )
 
-        all_colors = set(top_sig.keys()).union(set(opt_sig.keys()))
-
-        penalty = sum(
-            abs(top_sig.get(c, 0) - opt_sig.get(c, 0))
-            for c in all_colors
+        option_cv = cv2.cvtColor(
+            np.array(option_crop),
+            cv2.COLOR_RGB2GRAY
         )
 
-        penalties[i] = penalty
+        kp2, des2 = orb.detectAndCompute(
+            option_cv,
+            None
+        )
 
-        if penalty < lowest_penalty:
-            lowest_penalty = penalty
+        if des2 is None:
+            scores[i] = 0
+            continue
+
+        matches = bf.match(des1, des2)
+
+        matches = sorted(
+            matches,
+            key=lambda x: x.distance
+        )
+
+        # FILTER GOOD MATCHES
+        good_matches = [
+            m for m in matches
+            if m.distance < 50
+        ]
+
+        score = len(good_matches)
+
+        scores[i] = score
+
+        if score > best_score:
+            best_score = score
             best_match = i
 
-    CONFIDENCE_LIMIT = 5000
+    SAFE_THRESHOLD = 8
 
     return {
         "answer": best_match,
-        "penalty": lowest_penalty,
-        "safe": lowest_penalty <= CONFIDENCE_LIMIT,
-        "all_penalties": penalties
+        "safe": best_score >= SAFE_THRESHOLD,
+        "score": best_score,
+        "all_scores": scores
     }
 
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def start(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
     await update.message.reply_text(
-        "Send me a Jenny captcha image."
+        "Send a Jenny captcha image."
     )
 
 
-async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    photo = update.message.photo[-1]
+async def handle_photo(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
+    try:
+        photo = update.message.photo[-1]
 
-    file = await photo.get_file()
+        file = await photo.get_file()
 
-    image_bytes = await file.download_as_bytearray()
+        image_bytes = await file.download_as_bytearray()
 
-    result = await solve_image(image_bytes)
+        result = await solve_image(image_bytes)
 
-    text = (
-        f"✅ Best Match: {result['answer']}\n"
-        f"📉 Penalty: {result['penalty']}\n"
-        f"🔐 Safe: {result['safe']}\n\n"
-        f"📊 All Penalties:\n"
-    )
+        text = (
+            f"✅ Answer: {result['answer']}\n"
+            f"📊 Score: {result['score']}\n"
+            f"🔐 Safe: {result['safe']}\n\n"
+            f"📈 Match Scores:\n"
+        )
 
-    for k, v in result["all_penalties"].items():
-        text += f"{k}: {v}\n"
+        for k, v in result["all_scores"].items():
+            text += f"{k}: {v}\n"
 
-    await update.message.reply_text(text)
+        await update.message.reply_text(text)
+
+    except Exception as e:
+        await update.message.reply_text(
+            f"❌ Error:\n{str(e)}"
+        )
 
 
 def main():
-    app = Application.builder().token(BOT_TOKEN).build()
-
-    app.add_handler(CommandHandler("start", start))
+    app = Application.builder().token(
+        BOT_TOKEN
+    ).build()
 
     app.add_handler(
-        MessageHandler(filters.PHOTO, handle_photo)
+        CommandHandler("start", start)
     )
 
-    print("Bot running...")
+    app.add_handler(
+        MessageHandler(
+            filters.PHOTO,
+            handle_photo
+        )
+    )
+
+    print("Jenny Solver Bot Running...")
 
     app.run_polling()
 
