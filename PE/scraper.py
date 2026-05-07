@@ -1,53 +1,71 @@
-import os
 import requests
 from PIL import Image
 import imagehash
 import json
 import io
+import concurrent.futures
 
-# We will hash the first 251 Pokemon (Gen 1 & 2). Increase this if the bot uses higher gens.
 TOTAL_POKEMON = 251
 
-RETRO_URL = "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/versions/generation-ii/gold/{}.png"
-MODERN_URL = "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/{}.png"
-
-database = {
-    "retro": {},
-    "modern": {}
+URLS = {
+    "retro_normal": "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/versions/generation-ii/gold/{}.png",
+    "retro_shiny": "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/versions/generation-ii/gold/shiny/{}.png",
+    "modern_normal": "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/{}.png",
+    "modern_shiny": "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/shiny/{}.png"
 }
 
-print("Building offline hash database. This will take a minute...")
+# 1. Use a Session to keep the connection alive (massive speed boost)
+session = requests.Session()
 
-for poke_id in range(1, TOTAL_POKEMON + 1):
-    try:
-        # 1. Fetch Retro Sprite
-        retro_res = requests.get(RETRO_URL.format(poke_id))
-        if retro_res.status_code == 200:
-            img = Image.open(io.BytesIO(retro_res.content)).convert("RGBA")
-            # Create a white background to match the Telegram bot's top image
-            bg = Image.new("RGBA", img.size, "WHITE")
-            bg.paste(img, (0, 0), img)
-            r_hash = str(imagehash.phash(bg.convert("RGB")))
-            database["retro"][r_hash] = poke_id
+def process_api_image(res_content):
+    img = Image.open(io.BytesIO(res_content)).convert("RGBA")
+    bbox = img.split()[-1].getbbox()
+    if bbox:
+        img = img.crop(bbox)
+    img = img.resize((64, 64), Image.Resampling.LANCZOS)
+    bg = Image.new("RGB", (64, 64), (255, 255, 255))
+    bg.paste(img, (0, 0), img)
+    return str(imagehash.phash(bg))
 
-        # 2. Fetch Modern Sprite
-        modern_res = requests.get(MODERN_URL.format(poke_id))
-        if modern_res.status_code == 200:
-            img = Image.open(io.BytesIO(modern_res.content)).convert("RGBA")
-            # Create a dark background to match the Telegram bot's option boxes
-            bg = Image.new("RGBA", img.size, (43, 45, 49)) # Discord/Telegram dark grey
-            bg.paste(img, (0, 0), img)
-            m_hash = str(imagehash.phash(bg.convert("RGB")))
-            database["modern"][m_hash] = poke_id
-
-        if poke_id % 25 == 0:
-            print(f"Hashed {poke_id}/{TOTAL_POKEMON}...")
+def process_pokemon(poke_id):
+    """Fetches all 4 variations for a single Pokemon ID."""
+    local_db = {"retro": {}, "modern": {}}
+    
+    def fetch_and_hash(url_template, category):
+        try:
+            res = session.get(url_template.format(poke_id), timeout=5)
+            if res.status_code == 200:
+                img_hash = process_api_image(res.content)
+                local_db[category][img_hash] = poke_id
+        except:
+            pass # Ignore missing sprites or timeouts
             
-    except Exception as e:
-        print(f"Failed on ID {poke_id}: {e}")
+    fetch_and_hash(URLS["retro_normal"], "retro")
+    fetch_and_hash(URLS["retro_shiny"], "retro")
+    fetch_and_hash(URLS["modern_normal"], "modern")
+    fetch_and_hash(URLS["modern_shiny"], "modern")
+    
+    return local_db
 
-# Save the fingerprints to a JSON file
-with open("database.json", "w") as f:
-    json.dump(database, f)
+if name == "main":
+    print(f"Building Database with Multithreading... Hang tight!")
+    
+    final_database = {"retro": {}, "modern": {}}
+    
+    # 2. Fire off 20 requests at the exact same time
+    with concurrent.futures.ThreadPoolExecutor(max_workers=20) as executor:
+        # Map the function to all IDs
+        results = executor.map(process_pokemon, range(1, TOTAL_POKEMON + 1))
+        
+        # 3. Collect the threads as they finish and merge them into the master dictionary
+        for i, result in enumerate(results, 1):
+            final_database["retro"].update(result["retro"])
+            final_database["modern"].update(result["modern"])
+            
+            if i % 25 == 0:
+                print(f"Processed {i}/{TOTAL_POKEMON} Pokemon...")
 
-print("Success! database.json created. You can now run your main bot.")
+    with open("database.json", "w") as f:
+        json.dump(final_database, f)
+
+    print("Done! Database built at lightning speed.")
