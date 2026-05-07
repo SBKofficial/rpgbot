@@ -2,3 +2,4 @@ telethon
 requests
 Pillow
 imagehash
+beautifulsoup4
