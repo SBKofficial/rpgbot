@@ -199,13 +199,21 @@ async def handle_photo(
 ):
     try:
 
+        print("📩 Image received")
+
         photo = update.message.photo[-1]
+
+        print("⬇️ Downloading image")
 
         file = await photo.get_file()
 
         image_bytes = await file.download_as_bytearray()
 
+        print("🧠 Solving image")
+
         result = await solve_image(image_bytes)
+
+        print("✅ Result:", result)
 
         text = (
             f"✅ Answer: {result['answer']}\n"
@@ -227,10 +235,15 @@ async def handle_photo(
 
     except Exception as e:
 
+        import traceback
+
+        error_text = traceback.format_exc()
+
+        print(error_text)
+
         await update.message.reply_text(
             f"❌ Error:\n{str(e)}"
         )
-
 
 def main():
 
