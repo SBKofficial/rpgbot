@@ -1,162 +1,120 @@
-import io
+import telebot
 from PIL import Image
-
 import google.generativeai as genai
+import io
+import time
 
-from telegram import Update
-from telegram.ext import (
-    Application,
-    CommandHandler,
-    MessageHandler,
-    ContextTypes,
-    filters
-)
+TOKEN = '8341690614:AAEEzCkF7CJ5cHPH0K1cnLwpJclgeqvtlqM'
+bot = telebot.TeleBot(TOKEN)
 
-# =========================
-# CONFIG
-# =========================
+# 1. Put all your free API keys in a list
+API_KEYS = [
+    'AIzaSyDBOMQBHaOfiPL0h9T62tOkPlAbWOf_uXc',
+    'AIzaSyB7m791-hibcw5fpNkNlVLUhV48BEAhP5c'
+]
 
-BOT_TOKEN = "8341690614:AAEEzCkF7CJ5cHPH0K1cnLwpJclgeqvtlqM"
+# Track which key we are currently using
+current_key_index = 0
 
-GEMINI_API_KEY = "AIzaSyDBOMQBHaOfiPL0h9T62tOkPlAbWOf_uXc"
+def get_model():
+    """Configures GenAI with the current active key."""
+    genai.configure(api_key=API_KEYS[current_key_index])
+    return genai.GenerativeModel('gemini-1.5-flash')
 
-genai.configure(
-    api_key=GEMINI_API_KEY
-)
+def extract_crops(img):
+    w, h = img.size
+    crop_radius = int(w * 0.12)
+    
+    centers = {
+        'target': (w * 0.50, h * 0.14),
+        1: (w * 0.18, h * 0.48),
+        2: (w * 0.50, h * 0.48),
+        3: (w * 0.82, h * 0.48),
+        4: (w * 0.18, h * 0.83),
+        5: (w * 0.50, h * 0.83),
+        6: (w * 0.82, h * 0.83)
+    }
+    
+    crops = {}
+    for key, (cx, cy) in centers.items():
+        box = (cx - crop_radius, cy - crop_radius, cx + crop_radius, cy + crop_radius)
+        crops[key] = img.crop(box)
+    return crops
 
-model = genai.GenerativeModel(
-    "gemini-2.5-flash"
-)
-
-# =========================
-# GEMINI SOLVER
-# =========================
-
-async def solve_with_gemini(image_bytes):
-
-    image = Image.open(
-        io.BytesIO(image_bytes)
-    )
-
-    prompt = """
-You are solving a Pokémon captcha.
-
-The image contains:
-- One Pokémon at the top
-- Six numbered options below
-
-Your task:
-Identify which option matches the Pokémon shown at the top.
-
-Rules:
-- Match same Pokémon species
-- Shiny and normal forms count as SAME Pokémon
-- Reply ONLY with the option number
-- Reply with only one digit from 1 to 6
-"""
-
-    response = model.generate_content([
-        prompt,
-        image
-    ])
-
-    answer = response.text.strip()
-
-    return answer
-
-
-# =========================
-# START COMMAND
-# =========================
-
-async def start(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE
-):
-
-    await update.message.reply_text(
-        "Send a Jenny captcha image."
-    )
-
-
-# =========================
-# PHOTO HANDLER
-# =========================
-
-async def handle_photo(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE
-):
-
+@bot.message_handler(content_types=['photo'])
+def handle_photo(message):
+    global current_key_index 
+    
     try:
-
-        print("📩 Image received")
-
-        photo = update.message.photo[-1]
-
-        file = await photo.get_file()
-
-        image_bytes = (
-            await file.download_as_bytearray()
+        file_info = bot.get_file(message.photo[-1].file_id)
+        downloaded_file = bot.download_file(file_info.file_path)
+        img = Image.open(io.BytesIO(downloaded_file)).convert('RGB')
+        
+        crops = extract_crops(img)
+        
+        api_images = []
+        for key in ['target', 1, 2, 3, 4, 5, 6]:
+            img_byte_arr = io.BytesIO()
+            crops[key].save(img_byte_arr, format='JPEG')
+            api_images.append({
+                "mime_type": "image/jpeg",
+                "data": img_byte_arr.getvalue()
+            })
+            
+        prompt = (
+            "You are a Pokemon expert. I am providing 7 cropped images of Pokemon. "
+            "Image 1 is the Target. Images 2 through 7 are Options 1 through 6. "
+            "Identify the species name of all 7 Pokemon. "
+            "Return ONLY a comma-separated list of the 7 names in order."
         )
+        content = [prompt] + api_images
 
-        print("🧠 Sending to Gemini")
+        # 2. The Retry Loop
+        max_retries = len(API_KEYS)
+        attempts = 0
+        response = None
 
-        answer = await solve_with_gemini(
-            image_bytes
-        )
+        while attempts < max_retries:
+            try:
+                model = get_model()
+                response = model.generate_content(content)
+                break # If successful, break out of the retry loop
+                
+            except Exception as api_error:
+                error_msg = str(api_error).lower()
+                # Check if the error is a rate limit or quota issue
+                if "429" in error_msg or "quota" in error_msg or "exhausted" in error_msg:
+                    print(f"Key {current_key_index + 1} hit a limit. Swapping keys...")
+                    # Cycle to the next key in the list
+                    current_key_index = (current_key_index + 1) % len(API_KEYS)
+                    attempts += 1
+                    time.sleep(1) # Brief pause before hammering the API again
+                else:
+                    # If it's a different error (like a bad image), stop trying
+                    raise api_error
+        
+        if not response:
+             bot.reply_to(message, "All API keys are currently rate limited. Try again in a minute.")
+             return
 
-        print("✅ Gemini Answer:", answer)
-
-        await update.message.reply_text(
-            f"✅ Answer: {answer}"
-        )
+        # 3. Parse the names 
+        names = [name.strip().lower() for name in response.text.split(',')]
+        
+        if len(names) == 7:
+            target_name = names[0]
+            options_names = names[1:]
+            
+            if target_name in options_names:
+                match_number = options_names.index(target_name) + 1 
+                bot.reply_to(message, f"{match_number}")
+            else:
+                bot.reply_to(message, f"Target was {target_name.title()}, but couldn't find a match.")
+        else:
+            bot.reply_to(message, f"API returned weird formatting: {response.text}")
 
     except Exception as e:
+        bot.reply_to(message, f"Error: {e}")
 
-        import traceback
+print("Multi-Key Auto-Cycling bot is running...")
+bot.polling()
 
-        print(
-            traceback.format_exc()
-        )
-
-        await update.message.reply_text(
-            f"❌ Error:\n{str(e)}"
-        )
-
-
-# =========================
-# MAIN
-# =========================
-
-def main():
-
-    app = (
-        Application.builder()
-        .token(BOT_TOKEN)
-        .build()
-    )
-
-    app.add_handler(
-        CommandHandler(
-            "start",
-            start
-        )
-    )
-
-    app.add_handler(
-        MessageHandler(
-            filters.PHOTO,
-            handle_photo
-        )
-    )
-
-    print(
-        "Gemini Jenny Solver Running..."
-    )
-
-    app.run_polling()
-
-
-if __name__ == "__main__":
-    main()
