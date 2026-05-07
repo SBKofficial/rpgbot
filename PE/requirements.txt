@@ -1,5 +1,5 @@
-python-telegram-bot 
+python-telegram-bot
 Pillow
 opencv-python-headless
 numpy
-iamgehash
+ImageHash
