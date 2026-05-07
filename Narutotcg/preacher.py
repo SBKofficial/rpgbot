@@ -4,7 +4,7 @@ from PIL import Image
 import imagehash
 
 # Paths
-CARDS_FOLDER = 'official_cards'
+CARDS_FOLDER = 'Narutotcg'
 CACHE_FILE = 'shinobi_cache.json'
 
 def preload_cache():
