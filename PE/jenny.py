@@ -1,5 +1,4 @@
 import io
-import cv2
 import imagehash
 import numpy as np
 
@@ -15,6 +14,7 @@ from telegram.ext import (
 )
 
 BOT_TOKEN = "8341690614:AAEEzCkF7CJ5cHPH0K1cnLwpJclgeqvtlqM"
+
 
 async def solve_image(image_bytes):
 
@@ -60,25 +60,9 @@ async def solve_image(image_bytes):
         top_crop
     )
 
-    top_small = np.array(
+    top_arr = np.array(
         top_crop.resize((64, 64))
-    )
-
-    top_hist = cv2.calcHist(
-        [cv2.cvtColor(
-            np.array(top_crop),
-            cv2.COLOR_RGB2HSV
-        )],
-        [0, 1],
-        None,
-        [50, 60],
-        [0, 180, 0, 256]
-    )
-
-    cv2.normalize(
-        top_hist,
-        top_hist
-    )
+    ).astype(np.float32)
 
     best_match = None
     best_score = -999999
@@ -110,55 +94,43 @@ async def solve_image(image_bytes):
         )
 
         # =========================
-        # HISTOGRAM SCORE
+        # PIXEL DIFFERENCE
         # =========================
 
-        option_hist = cv2.calcHist(
-            [cv2.cvtColor(
-                np.array(option_crop),
-                cv2.COLOR_RGB2HSV
-            )],
-            [0, 1],
-            None,
-            [50, 60],
-            [0, 180, 0, 256]
-        )
-
-        cv2.normalize(
-            option_hist,
-            option_hist
-        )
-
-        hist_score = cv2.compareHist(
-            top_hist,
-            option_hist,
-            cv2.HISTCMP_CORREL
-        )
-
-        hist_score = max(
-            0,
-            hist_score
-        )
-
-        # =========================
-        # PIXEL SIMILARITY
-        # =========================
-
-        option_small = np.array(
+        option_arr = np.array(
             option_crop.resize((64, 64))
-        )
+        ).astype(np.float32)
 
         pixel_diff = np.mean(
+            np.abs(top_arr - option_arr)
+        )
+
+        pixel_score = (
+            255 - pixel_diff
+        )
+
+        # =========================
+        # COLOR DIFFERENCE
+        # =========================
+
+        top_mean = np.mean(
+            top_arr,
+            axis=(0, 1)
+        )
+
+        option_mean = np.mean(
+            option_arr,
+            axis=(0, 1)
+        )
+
+        color_diff = np.mean(
             np.abs(
-                top_small.astype(np.float32)
-                -
-                option_small.astype(np.float32)
+                top_mean - option_mean
             )
         )
 
-        pixel_score = max(
-            0,
-            255 - pixel_diff
+        color_score = (
+            255 - color_diff
         )
 
         # =========================
@@ -166,25 +138,25 @@ async def solve_image(image_bytes):
         # =========================
 
         final_score = (
-            (hash_score * 3.0)
-            +
-            (hist_score * 30.0)
+            (hash_score * 4.0)
             +
             (pixel_score * 1.5)
+            +
+            (color_score * 1.0)
         )
 
         all_scores[i] = {
             "hash": round(hash_score, 2),
-            "hist": round(hist_score, 2),
             "pixel": round(pixel_score, 2),
+            "color": round(color_score, 2),
             "final": round(final_score, 2)
         }
 
         print(
             f"Option {i} | "
             f"HASH={hash_score} | "
-            f"HIST={hist_score:.2f} | "
             f"PIXEL={pixel_score:.2f} | "
+            f"COLOR={color_score:.2f} | "
             f"FINAL={final_score:.2f}"
         )
 
@@ -233,6 +205,8 @@ async def handle_photo(
             image_bytes
         )
 
+        print("✅ Done")
+
         text = (
             f"✅ Answer: {result['answer']}\n"
             f"📊 Score: {result['score']}\n\n"
@@ -245,8 +219,8 @@ async def handle_photo(
             text += (
                 f"Option {k}\n"
                 f"HASH: {v['hash']}\n"
-                f"HIST: {v['hist']}\n"
                 f"PIXEL: {v['pixel']}\n"
+                f"COLOR: {v['color']}\n"
                 f"FINAL: {v['final']}\n\n"
             )
 
@@ -290,7 +264,7 @@ def main():
     )
 
     print(
-        "Stable Jenny Solver Running..."
+        "Pure PIL Jenny Solver Running..."
     )
 
     app.run_polling()
