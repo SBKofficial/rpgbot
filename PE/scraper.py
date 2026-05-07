@@ -47,7 +47,7 @@ def process_pokemon(poke_id):
     
     return local_db
 
-if name == "main":
+if __name__ == "__main__":
     print(f"Building Database with Multithreading... Hang tight!")
     
     final_database = {"retro": {}, "modern": {}}
@@ -69,3 +69,4 @@ if name == "main":
         json.dump(final_database, f)
 
     print("Done! Database built at lightning speed.")
+
