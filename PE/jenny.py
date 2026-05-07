@@ -14,11 +14,14 @@ from telegram.ext import (
     filters
 )
 
-BOT_TOKEN = '8341690614:AAEEzCkF7CJ5cHPH0K1cnLwpJclgeqvtlqM'
+BOT_TOKEN = "8341690614:AAEEzCkF7CJ5cHPH0K1cnLwpJclgeqvtlqM"
 
 
 async def solve_image(image_bytes):
-    img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+
+    img = Image.open(
+        io.BytesIO(image_bytes)
+    ).convert("RGB")
 
     w, h = img.size
 
@@ -37,6 +40,7 @@ async def solve_image(image_bytes):
     crop_radius = int(w * 0.10)
 
     def crop_region(cx, cy):
+
         return img.crop((
             int(cx - crop_radius),
             int(cy - crop_radius),
@@ -58,24 +62,34 @@ async def solve_image(image_bytes):
         cv2.COLOR_RGB2GRAY
     )
 
-    orb = cv2.ORB_create(nfeatures=500)
+    orb = cv2.ORB_create(
+        nfeatures=500
+    )
 
     kp1, des1 = orb.detectAndCompute(
         top_gray,
         None
     )
 
-    top_hash = imagehash.phash(top_crop)
+    top_hash = imagehash.phash(
+        top_crop
+    )
 
     top_hist = cv2.calcHist(
-        [cv2.cvtColor(np.array(top_crop), cv2.COLOR_RGB2HSV)],
+        [cv2.cvtColor(
+            np.array(top_crop),
+            cv2.COLOR_RGB2HSV
+        )],
         [0, 1],
         None,
         [50, 60],
         [0, 180, 0, 256]
     )
 
-    cv2.normalize(top_hist, top_hist)
+    cv2.normalize(
+        top_hist,
+        top_hist
+    )
 
     best_match = None
     best_final_score = -999999
@@ -84,7 +98,7 @@ async def solve_image(image_bytes):
 
     bf = cv2.BFMatcher(
         cv2.NORM_HAMMING,
-        crossCheck=True
+        crossCheck=False
     )
 
     for i in range(1, 7):
@@ -112,38 +126,75 @@ async def solve_image(image_bytes):
 
         if des1 is not None and des2 is not None:
 
-            matches = bf.match(des1, des2)
+            try:
 
-            good_matches = [
-                m for m in matches
-                if m.distance < 50
-            ]
+                matches = bf.knnMatch(
+                    des1,
+                    des2,
+                    k=2
+                )
 
-            orb_score = len(good_matches)
+                good_matches = []
+
+                for pair in matches:
+
+                    if len(pair) < 2:
+                        continue
+
+                    m, n = pair
+
+                    if m.distance < 0.75 * n.distance:
+                        good_matches.append(m)
+
+                orb_score = len(
+                    good_matches
+                )
+
+            except Exception as e:
+
+                print(
+                    "ORB ERROR:",
+                    e
+                )
+
+                orb_score = 0
 
         # =========================
         # HASH SCORE
         # =========================
 
-        option_hash = imagehash.phash(option_crop)
+        option_hash = imagehash.phash(
+            option_crop
+        )
 
-        hash_diff = top_hash - option_hash
+        hash_diff = (
+            top_hash - option_hash
+        )
 
-        hash_score = max(0, 64 - hash_diff)
+        hash_score = max(
+            0,
+            64 - hash_diff
+        )
 
         # =========================
-        # COLOR HISTOGRAM SCORE
+        # HISTOGRAM SCORE
         # =========================
 
         option_hist = cv2.calcHist(
-            [cv2.cvtColor(np.array(option_crop), cv2.COLOR_RGB2HSV)],
+            [cv2.cvtColor(
+                np.array(option_crop),
+                cv2.COLOR_RGB2HSV
+            )],
             [0, 1],
             None,
             [50, 60],
             [0, 180, 0, 256]
         )
 
-        cv2.normalize(option_hist, option_hist)
+        cv2.normalize(
+            option_hist,
+            option_hist
+        )
 
         hist_score = cv2.compareHist(
             top_hist,
@@ -151,10 +202,13 @@ async def solve_image(image_bytes):
             cv2.HISTCMP_CORREL
         )
 
-        hist_score = max(0, hist_score)
+        hist_score = max(
+            0,
+            hist_score
+        )
 
         # =========================
-        # FINAL HYBRID SCORE
+        # FINAL SCORE
         # =========================
 
         final_score = (
@@ -164,22 +218,49 @@ async def solve_image(image_bytes):
         )
 
         all_scores[i] = {
-            "orb": round(orb_score, 2),
-            "hash": round(hash_score, 2),
-            "hist": round(hist_score, 2),
-            "final": round(final_score, 2)
+            "orb": round(
+                orb_score,
+                2
+            ),
+            "hash": round(
+                hash_score,
+                2
+            ),
+            "hist": round(
+                hist_score,
+                2
+            ),
+            "final": round(
+                final_score,
+                2
+            )
         }
 
+        print(
+            f"Option {i} | "
+            f"ORB={orb_score} | "
+            f"HASH={hash_score} | "
+            f"HIST={hist_score:.2f} | "
+            f"FINAL={final_score:.2f}"
+        )
+
         if final_score > best_final_score:
+
             best_final_score = final_score
+
             best_match = i
 
     SAFE_THRESHOLD = 40
 
     return {
         "answer": best_match,
-        "safe": best_final_score >= SAFE_THRESHOLD,
-        "score": round(best_final_score, 2),
+        "safe": (
+            best_final_score >= SAFE_THRESHOLD
+        ),
+        "score": round(
+            best_final_score,
+            2
+        ),
         "all_scores": all_scores
     }
 
@@ -188,6 +269,7 @@ async def start(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE
 ):
+
     await update.message.reply_text(
         "Send a Jenny captcha image."
     )
@@ -197,6 +279,7 @@ async def handle_photo(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE
 ):
+
     try:
 
         print("📩 Image received")
@@ -207,21 +290,32 @@ async def handle_photo(
 
         file = await photo.get_file()
 
-        image_bytes = await file.download_as_bytearray()
+        image_bytes = (
+            await file.download_as_bytearray()
+        )
 
         print("🧠 Solving image")
 
-        result = await solve_image(image_bytes)
+        result = await solve_image(
+            image_bytes
+        )
 
         print("✅ Result:", result)
 
         text = (
-            f"✅ Answer: {result['answer']}\n"
-            f"📊 Final Score: {result['score']}\n"
-            f"🔐 Safe: {result['safe']}\n\n"
+            f"✅ Answer: "
+            f"{result['answer']}\n"
+
+            f"📊 Final Score: "
+            f"{result['score']}\n"
+
+            f"🔐 Safe: "
+            f"{result['safe']}\n\n"
         )
 
-        for k, v in result["all_scores"].items():
+        for k, v in result[
+            "all_scores"
+        ].items():
 
             text += (
                 f"Option {k}\n"
@@ -231,7 +325,9 @@ async def handle_photo(
                 f"FINAL: {v['final']}\n\n"
             )
 
-        await update.message.reply_text(text)
+        await update.message.reply_text(
+            text
+        )
 
     except Exception as e:
 
@@ -245,14 +341,20 @@ async def handle_photo(
             f"❌ Error:\n{str(e)}"
         )
 
+
 def main():
 
-    app = Application.builder().token(
-        BOT_TOKEN
-    ).build()
+    app = (
+        Application.builder()
+        .token(BOT_TOKEN)
+        .build()
+    )
 
     app.add_handler(
-        CommandHandler("start", start)
+        CommandHandler(
+            "start",
+            start
+        )
     )
 
     app.add_handler(
@@ -262,7 +364,9 @@ def main():
         )
     )
 
-    print("Hybrid Jenny Solver Running...")
+    print(
+        "Hybrid Jenny Solver Running..."
+    )
 
     app.run_polling()
 
