@@ -9,7 +9,7 @@ from urllib.parse import urljoin
 
 # --- CONFIGURATION ---
 # Replace this with the actual URL of the card gallery or wiki
-TARGET_URL = "https://example.com/naruto-tcg-gallery" 
+TARGET_URL = "https://www.narutotcgmythos.com/card-gallery" 
 SAVE_FOLDER = "official_cards"
 CACHE_FILE = "shinobi_cache.json"
 
