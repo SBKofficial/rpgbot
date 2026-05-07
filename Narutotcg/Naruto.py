@@ -55,14 +55,13 @@ async def stats_command(event):
     )
     await event.edit(stats_msg)
 
+# --- 🛠️ FIX NAME COMMAND 🛠️ ---
 @client.on(events.NewMessage(outgoing=True, pattern=r'(?i)^\.fixname (.*) \| (.*)'))
 async def fix_name_command(event):
-    # Extracts the old wrong name and the new correct name
     old_name = event.pattern_match.group(1).strip()
     new_name = event.pattern_match.group(2).strip()
     
     updated_count = 0
-    # Search the cache for the wrong name and replace it
     for img_hash, cached_name in image_cache.items():
         if cached_name.lower() == old_name.lower():
             image_cache[img_hash] = new_name
@@ -95,14 +94,20 @@ async def shinobi_catcher(event):
                 
                 # 2. Check memory cache first
                 if img_hash in image_cache:
-                    shinobi_name = image_cache[img_hash]
-                    bot_stats["cache_hits"] += 1
-                    print("⚡ Image recognized from memory! Skipping OCR API.")
+                    full_shinobi_name = image_cache[img_hash]
                     
-                    catch_command = f'/catch {shinobi_name}'
-                    sent_msg = await event.respond(catch_command)
-                    bot_stats["catch_attempts"] += 1
-                    print(f"✅ Successfully Sent: {catch_command} to [{chat_title}]")
+                    # --- NEW: Extract first name from cached full name ---
+                    first_name = full_shinobi_name.split()[0] if full_shinobi_name else ""
+                    # -----------------------------------------------------
+                    
+                    bot_stats["cache_hits"] += 1
+                    print(f"⚡ Image recognized! Full Name: '{full_shinobi_name}'. Skipping OCR.")
+                    
+                    if first_name:
+                        catch_command = f'/catch {first_name}'
+                        sent_msg = await event.respond(catch_command)
+                        bot_stats["catch_attempts"] += 1
+                        print(f"✅ Successfully Sent: {catch_command} to [{chat_title}]")
                     
                 else:
                     # 3. If unknown, use OCR API
@@ -132,17 +137,26 @@ async def shinobi_catcher(event):
                             
                             # Normalizes text (e.g., Kisäme -> Kisame)
                             clean_name = unicodedata.normalize('NFKD', raw_name).encode('ASCII', 'ignore').decode('utf-8')
-                            shinobi_name = "".join(c for c in clean_name if c.isalpha() or c.isspace()).title()
                             
-                            catch_command = f'/catch {shinobi_name}'
-                            sent_msg = await event.respond(catch_command)
-                            bot_stats["catch_attempts"] += 1
-                            print(f"✅ Successfully Sent: {catch_command} to [{chat_title}]")
+                            # The full, clean name to save to the database
+                            full_name = "".join(c for c in clean_name if c.isalpha() or c.isspace()).title().strip()
                             
-                            # Save to cache for next time
-                            image_cache[img_hash] = shinobi_name
-                            save_cache()
-                            print(f"💾 Saved '{shinobi_name}' to local cache.")
+                            # The first name only, to use for the catch command
+                            first_name = full_name.split()[0] if full_name else ""
+                            
+                            if first_name:
+                                catch_command = f'/catch {first_name}'
+                                sent_msg = await event.respond(catch_command)
+                                bot_stats["catch_attempts"] += 1
+                                print(f"✅ Successfully Sent: {catch_command} to [{chat_title}]")
+                                
+                                # --- NEW: Save the FULL name to cache ---
+                                image_cache[img_hash] = full_name
+                                save_cache()
+                                print(f"💾 Saved full name '{full_name}' to local cache.")
+                                # ----------------------------------------
+                            else:
+                                print("❌ Name extraction resulted in empty string.")
                             
                         else:
                             bot_stats["ocr_failures"] += 1
@@ -161,7 +175,7 @@ async def shinobi_catcher(event):
 print("Connecting to Telegram...")
 client.start()
 
-print("✅ Bot running with Public API Vision, Cache, and Normalizer enabled!")
+print("✅ Bot running! Caching FULL names, catching with FIRST names.")
 print(f"✅ Monitoring {len(TARGET_GROUPS)} groups.")
 try:
     client.run_until_disconnected()
