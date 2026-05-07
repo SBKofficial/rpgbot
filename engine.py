@@ -73,7 +73,7 @@ class LabEngine:
     def _apply_limits(self):
         mem_limit = 1024 * 1024 * 1024 
         resource.setrlimit(resource.RLIMIT_AS, (mem_limit, mem_limit))
-        file_limit = 50 * 1024 * 1024
+        file_limit = 500 * 1024 * 1024
         resource.setrlimit(resource.RLIMIT_FSIZE, (file_limit, file_limit))
         os.nice(19)
         os.setsid()
