@@ -55,6 +55,26 @@ async def stats_command(event):
     )
     await event.edit(stats_msg)
 
+@client.on(events.NewMessage(outgoing=True, pattern=r'(?i)^\.fixname (.*) \| (.*)'))
+async def fix_name_command(event):
+    # Extracts the old wrong name and the new correct name
+    old_name = event.pattern_match.group(1).strip()
+    new_name = event.pattern_match.group(2).strip()
+    
+    updated_count = 0
+    # Search the cache for the wrong name and replace it
+    for img_hash, cached_name in image_cache.items():
+        if cached_name.lower() == old_name.lower():
+            image_cache[img_hash] = new_name
+            updated_count += 1
+            
+    if updated_count > 0:
+        save_cache()
+        await event.edit(f"✅ **Cache Updated!**\nChanged `{old_name}` to `{new_name}` across {updated_count} image(s).")
+        print(f"🛠️ Cache manually corrected: {old_name} -> {new_name}")
+    else:
+        await event.edit(f"⚠️ **Not Found:** Could not find `{old_name}` in the local cache.")
+
 @client.on(events.NewMessage(chats=TARGET_GROUPS, from_users=GAME_BOT_USERNAME))
 async def shinobi_catcher(event):
     if 'ᴀ sʜɪɴᴏʙɪ ʜᴀs ᴀᴘᴘᴇᴀʀᴇᴅ!' in event.raw_text:
