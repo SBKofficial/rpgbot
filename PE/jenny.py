@@ -19,7 +19,7 @@ current_key_index = 0
 def get_model():
     """Configures GenAI with the current active key."""
     genai.configure(api_key=API_KEYS[current_key_index])
-    return genai.GenerativeModel('gemini-1.5-flash')
+    return genai.GenerativeModel('gemini-2.5-flash')
 
 def extract_crops(img):
     w, h = img.size
