@@ -1,2 +1,4 @@
-aiogram>=3.4.0
-aiosqlite>=0.20.0
+python-telegram-bot
+Pillow
+numpy
+ImageHash
