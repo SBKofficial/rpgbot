@@ -208,19 +208,39 @@ async def game_handler(event):
                     else:
                         print(f"⚠️ Fuzzy Match Failed. Could not link '{target_poke}' to any buttons.")
 
+            # 3. CODE (Captcha Challenge: "Code")
             elif "code" in clean_text:
+                # Clean up the OCR text to be just letters and numbers
                 captcha_code = re.sub(r'[^a-z0-9]', '', ocr_text)
+                
                 if captcha_code and event.message.buttons:
-                    for row_idx, row in enumerate(event.message.buttons):
-                        for col_idx, btn in enumerate(row):
-                            if captcha_code in btn.text.lower():
-                                delay = random.uniform(1.0, 2.0)
-                                print(f"Sleeping {delay:.2f}s before clicking Captcha...")
-                                await asyncio.sleep(delay)
-                                await event.message.click(row_idx, col_idx)
-                                clicked = True
-                                break
+                    # Step 1: Collect all the text from the captcha buttons
+                    button_texts = []
+                    for row in event.message.buttons:
+                        for btn in row:
+                            button_texts.append(btn.text.lower())
+                    
+                    # Step 2: FUZZY MATCH! Find the button that is the closest match
+                    # cutoff=0.5 means it allows for 1 or 2 wrong characters (like 'o' instead of '0')
+                    matches = difflib.get_close_matches(captcha_code, button_texts, n=1, cutoff=0.5)
+                    
+                    if matches:
+                        best_match = matches[0]
+                        print(f"🎯 FUZZY MATCH SUCCESS! OCR read '{captcha_code}' -> Matched to button '{best_match}'")
+                        
+                        for row_idx, row in enumerate(event.message.buttons):
+                            for col_idx, btn in enumerate(row):
+                                if btn.text.lower() == best_match:
+                                    delay = random.uniform(1.0, 2.0)
+                                    print(f"Sleeping {delay:.2f}s before clicking Captcha...")
+                                    await asyncio.sleep(delay)
+                                    await event.message.click(row_idx, col_idx)
+                                    clicked = True
+                                    break
                             if clicked: break
+                    else:
+                        print(f"⚠️ Captcha Match Failed. Could not link '{captcha_code}' to any buttons.")
+
                             
             # Failsafe: if the host took so long that it failed to click
             if not clicked:
