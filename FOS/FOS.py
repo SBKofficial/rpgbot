@@ -25,17 +25,25 @@ response_received_event = asyncio.Event()
 last_explore_time = 0 
 
 async def extract_text_from_image(photo_path):
-    """100% Offline OCR with Image Preprocessing for perfect accuracy."""
+    """100% Offline OCR with Corrected Contrast Math."""
     try:
         print("Reading image locally with ddddocr...")
         start_time = time.time()
         
-        # 1. PREPROCESS THE IMAGE: Invert colors and apply high-contrast
-        img = Image.open(photo_path).convert('L') # Grayscale
-        img = ImageOps.invert(img) # Invert darks and lights
-        img = img.point(lambda p: 255 if p > 150 else 0) # High contrast
+        # 1. PREPROCESS THE IMAGE (Fixed Math)
+        img = Image.open(photo_path).convert('L') # Convert to Grayscale
         
-        # 2. Convert the processed image back to raw bytes for ddddocr
+        # Anything brighter than dark gray (60) becomes white, the rest black.
+        # This isolates colored text from dark backgrounds.
+        img = img.point(lambda p: 255 if p > 60 else 0) 
+        
+        # Invert so we have Black text on a White background
+        img = ImageOps.invert(img) 
+        
+        # Save a debug copy so you can see exactly what the bot is reading
+        img.save("debug_image.jpg")
+        
+        # 2. Convert to bytes for ddddocr
         img_byte_arr = io.BytesIO()
         img.save(img_byte_arr, format='JPEG')
         image_bytes = img_byte_arr.getvalue()
@@ -43,24 +51,25 @@ async def extract_text_from_image(photo_path):
         def _read():
             return ocr_engine.classification(image_bytes)
             
-        # 3. Read the image with a timeout
+        # 3. Read the image
         result = await asyncio.wait_for(asyncio.to_thread(_read), timeout=45.0)
         
         elapsed = time.time() - start_time
         clean_result = result.lower().strip()
         
         print(f"✅ OCR finished in {elapsed:.2f} seconds!")
-        print(f"🔍 OCR Saw: '{clean_result}'") # <--- DEBUG TOOL
+        print(f"🔍 OCR Saw: '{clean_result}'") 
         
         return clean_result
         
     except asyncio.TimeoutError:
-        print("⚠️ CRITICAL: OCR took more than 45 seconds! Host CPU is too slow.")
+        print("⚠️ CRITICAL: OCR took more than 45 seconds!")
         return ""
     except Exception as e:
         print(f"Local OCR Error: {e}")
         return ""
     finally:
+        # Keep the server clean (Original photo only, we keep debug_image.jpg for now)
         if os.path.exists(photo_path):
             os.remove(photo_path)
 
