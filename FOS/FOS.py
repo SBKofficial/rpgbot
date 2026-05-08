@@ -5,6 +5,7 @@ import unicodedata
 import re
 import os
 import random
+import difflib
 import time
 from telethon import TelegramClient, events
 import ddddocr
@@ -170,14 +171,33 @@ async def game_handler(event):
                     else:
                         print(f"⚠️ OCR read an invalid number: {target_num}")
                     
+            # 2. POKEMON (Poke-selection: "Pick: X")
             elif "pokemon" in clean_text:
-                match = re.search(r'pick[^a-z]*([a-z\-]+)', ocr_text)
-                if match:
-                    target_poke = match.group(1).strip()
-                    if event.message.buttons:
+                # Step 1: Strip out common misspellings of "pick" so we just get the name
+                target_poke = re.sub(r'(?i)(pick|pck|pic|piks|pcks|pcks:)[^a-z]*', '', ocr_text).strip()
+                
+                # If it accidentally stripped everything, fall back to the raw text
+                if not target_poke:
+                    target_poke = ocr_text
+
+                if event.message.buttons:
+                    # Step 2: Collect all the text from the buttons
+                    button_texts = []
+                    for row in event.message.buttons:
+                        for btn in row:
+                            button_texts.append(btn.text.lower())
+                    
+                    # Step 3: FUZZY MATCH! Find the button that most closely resembles the OCR gibberish
+                    # cutoff=0.3 means it allows for MASSIVE typos
+                    matches = difflib.get_close_matches(target_poke, button_texts, n=1, cutoff=0.3)
+                    
+                    if matches:
+                        best_match = matches[0]
+                        print(f"🎯 FUZZY MATCH SUCCESS! OCR read '{ocr_text}' -> Matched to button '{best_match}'")
+                        
                         for row_idx, row in enumerate(event.message.buttons):
                             for col_idx, btn in enumerate(row):
-                                if target_poke in btn.text.lower():
+                                if btn.text.lower() == best_match:
                                     delay = random.uniform(1.0, 2.0)
                                     print(f"Sleeping {delay:.2f}s before clicking Pokemon...")
                                     await asyncio.sleep(delay)
@@ -185,6 +205,8 @@ async def game_handler(event):
                                     clicked = True
                                     break
                             if clicked: break
+                    else:
+                        print(f"⚠️ Fuzzy Match Failed. Could not link '{target_poke}' to any buttons.")
 
             elif "code" in clean_text:
                 captcha_code = re.sub(r'[^a-z0-9]', '', ocr_text)
