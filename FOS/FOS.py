@@ -2,6 +2,7 @@ import asyncio
 import random
 import re
 import os
+import unicodedata
 from telethon import TelegramClient, events
 from PIL import Image, ImageOps
 import pytesseract
@@ -24,10 +25,11 @@ def extract_text_from_image(image_path):
         text = pytesseract.image_to_string(img, config='--psm 7').strip()
         return text.lower() # Return everything in lowercase
     finally:
+        # Prevent server storage from filling up
         if os.path.exists(image_path):
             os.remove(image_path)
 
-# --- CONTROL PANEL ---
+# --- CONTROL PANEL (Listen to your own messages in 'Saved Messages') ---
 @client.on(events.NewMessage(chats='me'))
 async def toggle_script(event):
     global is_running
@@ -45,32 +47,35 @@ async def game_handler(event):
     if not is_running:
         return
 
-    # 1. Convert the entire incoming message to lowercase immediately
-    text = (event.raw_text or "").lower()
+    # 1. Extract raw text
+    raw_text = event.raw_text or ""
     
+    # 2. Strip fancy Unicode fonts and convert to lowercase
+    normal_text = unicodedata.normalize('NFKC', raw_text).lower()
+    
+    # 3. Remove all spaces so things like "c h a r a c t e r" become "character"
+    clean_text = normal_text.replace(" ", "")
+    
+    # Global delay of 1 to 1.5 seconds per action to mimic human speed
     await asyncio.sleep(random.uniform(1.0, 1.5))
 
     try:
-        # 2. ENCOUNTERED / CHARACTER
-        if any(kw in text for kw in ["encountered", "character"]):
+        # 1. ENCOUNTERED / CHARACTER / TAILED (Catch them immediately)
+        if any(kw in clean_text for kw in ["encountered", "character", "tailed"]):
             await event.message.click(0)
 
-        # 3. EXPLORE TRIGGERS
-        elif any(kw in text for kw in ["victory", "crate", "defeat", "correct", "tailed"]):
-            await client.send_message(BOT_USERNAME, "/explore")
-
-        # 4. WHACK-A-MOLE
-        elif "whack-a-mole" in text and event.photo:
+        # 2. CHALLENGES WITH OCR (Check these BEFORE the explore triggers)
+        elif "whack-a-mole" in clean_text and event.photo:
             photo_path = await event.download_media()
             ocr_text = extract_text_from_image(photo_path)
             
             match = re.search(r'\d', ocr_text) 
             if match:
                 target_num = int(match.group(0))
+                # Buttons are 1-9. Telethon uses 0-indexed flat arrays.
                 await event.message.click(target_num - 1)
 
-        # 5. CAPTCHA
-        elif "captcha" in text and event.photo:
+        elif "captcha" in clean_text and event.photo:
             photo_path = await event.download_media()
             ocr_text = extract_text_from_image(photo_path)
             
@@ -80,13 +85,11 @@ async def game_handler(event):
             if captcha_code and event.message.buttons:
                 for row_idx, row in enumerate(event.message.buttons):
                     for col_idx, btn in enumerate(row):
-                        # Convert button text to lowercase before checking
                         if captcha_code in btn.text.lower():
                             await event.message.click(row_idx, col_idx)
                             return
 
-        # 6. POKE-SELECTION
-        elif "poke-selection" in text and event.photo:
+        elif "poke-selection" in clean_text and event.photo:
             photo_path = await event.download_media()
             ocr_text = extract_text_from_image(photo_path)
             
@@ -98,16 +101,20 @@ async def game_handler(event):
                 if event.message.buttons:
                     for row_idx, row in enumerate(event.message.buttons):
                         for col_idx, btn in enumerate(row):
-                            # Convert button text to lowercase before checking
                             if target_poke in btn.text.lower():
                                 await event.message.click(row_idx, col_idx)
                                 return
 
+        # 3. EXPLORE TRIGGERS (End states, safe to move on)
+        elif any(kw in clean_text for kw in ["victory", "crate", "defeat", "correct!", "solved"]):
+            await client.send_message(BOT_USERNAME, "/explore")
+
     except Exception as e:
-        print(f"Action failed on message: {text[:20]}... Error: {e}")
+        print(f"Action failed on message: {raw_text[:20]}... Error: {e}")
 
 print("Userbot is running...")
 print("Go to your 'Saved Messages' in Telegram and send '1' to start, or '0' to stop.")
+
 client.start()
 client.run_until_disconnected()
 
