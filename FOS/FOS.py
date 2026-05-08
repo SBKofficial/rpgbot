@@ -1,3 +1,5 @@
+import io
+from PIL import Image, ImageOps
 import asyncio
 import unicodedata
 import re
@@ -23,24 +25,34 @@ response_received_event = asyncio.Event()
 last_explore_time = 0 
 
 async def extract_text_from_image(photo_path):
-    """100% Offline OCR with a processing timer for slow hosts."""
+    """100% Offline OCR with Image Preprocessing for perfect accuracy."""
     try:
         print("Reading image locally with ddddocr...")
         start_time = time.time()
         
-        with open(photo_path, "rb") as f:
-            image_bytes = f.read()
+        # 1. PREPROCESS THE IMAGE: Invert colors and apply high-contrast
+        img = Image.open(photo_path).convert('L') # Grayscale
+        img = ImageOps.invert(img) # Invert darks and lights
+        img = img.point(lambda p: 255 if p > 150 else 0) # High contrast
+        
+        # 2. Convert the processed image back to raw bytes for ddddocr
+        img_byte_arr = io.BytesIO()
+        img.save(img_byte_arr, format='JPEG')
+        image_bytes = img_byte_arr.getvalue()
             
         def _read():
             return ocr_engine.classification(image_bytes)
             
-        # Give the slow host up to 45 seconds to finish before timing out
+        # 3. Read the image with a timeout
         result = await asyncio.wait_for(asyncio.to_thread(_read), timeout=45.0)
         
         elapsed = time.time() - start_time
-        print(f"✅ OCR finished in {elapsed:.2f} seconds!")
+        clean_result = result.lower().strip()
         
-        return result.lower().strip()
+        print(f"✅ OCR finished in {elapsed:.2f} seconds!")
+        print(f"🔍 OCR Saw: '{clean_result}'") # <--- DEBUG TOOL
+        
+        return clean_result
         
     except asyncio.TimeoutError:
         print("⚠️ CRITICAL: OCR took more than 45 seconds! Host CPU is too slow.")
@@ -49,7 +61,6 @@ async def extract_text_from_image(photo_path):
         print(f"Local OCR Error: {e}")
         return ""
     finally:
-        # Keep the server clean
         if os.path.exists(photo_path):
             os.remove(photo_path)
 
