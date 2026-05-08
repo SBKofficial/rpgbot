@@ -116,15 +116,27 @@ async def game_handler(event):
             
             clicked = False
             
+            # 1. SLOT (Whack-a-mole: "Target: X")
             if "slot" in clean_text:
                 match = re.search(r'\d', ocr_text) 
                 if match:
                     target_num = int(match.group(0))
-                    delay = random.uniform(1.0, 2.0)
-                    print(f"Sleeping {delay:.2f}s before clicking Slot...")
-                    await asyncio.sleep(delay)
-                    await event.message.click(target_num - 1)
-                    clicked = True
+                    
+                    # Ensure it's a valid 1-9 button
+                    if 1 <= target_num <= 9:
+                        # MATRIX MATH: Convert 1-9 into (Row, Column) for a 3x3 grid
+                        row_idx = (target_num - 1) // 3
+                        col_idx = (target_num - 1) % 3
+                        
+                        delay = random.uniform(1.0, 2.0)
+                        print(f"Sleeping {delay:.2f}s before clicking Slot ({row_idx}, {col_idx})...")
+                        await asyncio.sleep(delay)
+                        
+                        # Click using exact Row and Column coordinates
+                        await event.message.click(row_idx, col_idx)
+                        clicked = True
+                    else:
+                        print(f"⚠️ OCR read an invalid number: {target_num}")
                     
             elif "pokemon" in clean_text:
                 match = re.search(r'pick[^a-z]*([a-z\-]+)', ocr_text)
