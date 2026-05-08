@@ -1,0 +1,3 @@
+telethon
+pytesseract
+Pillow
