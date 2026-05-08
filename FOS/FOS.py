@@ -25,25 +25,38 @@ response_received_event = asyncio.Event()
 last_explore_time = 0 
 
 async def extract_text_from_image(photo_path):
-    """100% Offline OCR with Corrected Contrast Math."""
+    """100% Offline OCR with Auto-Cropping for Captchas."""
     try:
         print("Reading image locally with ddddocr...")
         start_time = time.time()
         
-        # 1. PREPROCESS THE IMAGE (Fixed Math)
-        img = Image.open(photo_path).convert('L') # Convert to Grayscale
+        # 1. PREPROCESS THE IMAGE
+        img = Image.open(photo_path)
         
-        # Anything brighter than dark gray (60) becomes white, the rest black.
-        # This isolates colored text from dark backgrounds.
+        # Make it 2x larger
+        new_size = (img.width * 2, img.height * 2)
+        img = img.resize(new_size, Image.Resampling.LANCZOS)
+        
+        # Grayscale and high contrast
+        img = img.convert('L')
         img = img.point(lambda p: 255 if p > 60 else 0) 
+        img = ImageOps.invert(img) # Now it's Black text on White background
         
-        # Invert so we have Black text on a White background
-        img = ImageOps.invert(img) 
+        # 2. AUTO-CROP THE EMPTY WHITE SPACE
+        # Pillow's getbbox() needs a black background to find the text
+        inverted_for_bbox = ImageOps.invert(img) 
+        bbox = inverted_for_bbox.getbbox()
         
-        # Save a debug copy so you can see exactly what the bot is reading
+        if bbox:
+            # Crop the image to exactly where the text is
+            img = img.crop(bbox)
+            # Add a small 10-pixel white border so the letters don't touch the edge
+            img = ImageOps.expand(img, border=10, fill='white')
+            
+        # Save debug copy (Check this file! It should now just be a tight box around '9RT400')
         img.save("debug_image.jpg")
         
-        # 2. Convert to bytes for ddddocr
+        # 3. Convert to bytes for ddddocr
         img_byte_arr = io.BytesIO()
         img.save(img_byte_arr, format='JPEG')
         image_bytes = img_byte_arr.getvalue()
@@ -51,7 +64,7 @@ async def extract_text_from_image(photo_path):
         def _read():
             return ocr_engine.classification(image_bytes)
             
-        # 3. Read the image
+        # 4. Read the image
         result = await asyncio.wait_for(asyncio.to_thread(_read), timeout=45.0)
         
         elapsed = time.time() - start_time
@@ -69,7 +82,6 @@ async def extract_text_from_image(photo_path):
         print(f"Local OCR Error: {e}")
         return ""
     finally:
-        # Keep the server clean (Original photo only, we keep debug_image.jpg for now)
         if os.path.exists(photo_path):
             os.remove(photo_path)
 
