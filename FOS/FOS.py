@@ -26,25 +26,27 @@ response_received_event = asyncio.Event()
 last_explore_time = 0 
 
 async def extract_text_from_image(photo_path):
-    """100% Offline OCR with Auto-Cropping for Captchas."""
+    """100% Offline OCR optimized for White Backgrounds."""
     try:
         print("Reading image locally with ddddocr...")
         start_time = time.time()
         
-        # 1. PREPROCESS THE IMAGE
+        # 1. PREPROCESS THE IMAGE (White Background Mode)
         img = Image.open(photo_path)
         
         # Make it 2x larger
         new_size = (img.width * 2, img.height * 2)
         img = img.resize(new_size, Image.Resampling.LANCZOS)
         
-        # Grayscale and high contrast
+        # Convert to Grayscale
         img = img.convert('L')
-        img = img.point(lambda p: 255 if p > 60 else 0) 
-        img = ImageOps.invert(img) # Now it's Black text on White background
+        
+        # MAGIC THRESHOLD: The background is white (~255), text is colored (darker).
+        # This forces all colored text to pure Black (0) and background to pure White (255)
+        img = img.point(lambda p: 0 if p < 230 else 255) 
         
         # 2. AUTO-CROP THE EMPTY WHITE SPACE
-        # Pillow's getbbox() needs a black background to find the text
+        # Pillow's getbbox() needs a black background to find the text, so we invert temporarily
         inverted_for_bbox = ImageOps.invert(img) 
         bbox = inverted_for_bbox.getbbox()
         
@@ -54,7 +56,7 @@ async def extract_text_from_image(photo_path):
             # Add a small 10-pixel white border so the letters don't touch the edge
             img = ImageOps.expand(img, border=10, fill='white')
             
-        # Save debug copy (Check this file! It should now just be a tight box around '9RT400')
+        # Save debug copy (Should look like incredibly crisp black text on a tiny white box)
         img.save("debug_image.jpg")
         
         # 3. Convert to bytes for ddddocr
@@ -128,6 +130,7 @@ async def toggle_script(event):
 @client.on(events.MessageEdited(chats=TARGET_BOT_ID))
 async def game_handler(event):
     global last_explore_time
+    global is_running  # <--- Added so we can turn the bot off from here
     
     if not is_running:
         return
@@ -142,58 +145,45 @@ async def game_handler(event):
         # ==========================================
         # GROUP 1: IMAGE CHALLENGES
         # ==========================================
-        if any(kw in clean_text for kw in ["slot", "pokemon", "code"]) and event.photo:
+        if any(kw in clean_text for kw in ["slot", "hit", "pokemon", "code"]) and event.photo:
             print("▶ Group 1: Image Challenge Detected")
             photo_path = await event.download_media()
             ocr_text = await extract_text_from_image(photo_path)
             
             clicked = False
             
-            # 1. SLOT (Whack-a-mole: "Target: X")
-            if "slot" in clean_text:
+            # 1. SLOT / HIT (Whack-a-mole)
+            if "slot" in clean_text or "hit" in clean_text:
                 match = re.search(r'\d', ocr_text) 
                 if match:
                     target_num = int(match.group(0))
                     
-                    # Ensure it's a valid 1-9 button
                     if 1 <= target_num <= 9:
-                        # MATRIX MATH: Convert 1-9 into (Row, Column) for a 3x3 grid
                         row_idx = (target_num - 1) // 3
                         col_idx = (target_num - 1) % 3
                         
                         delay = random.uniform(1.0, 2.0)
-                        print(f"Sleeping {delay:.2f}s before clicking Slot ({row_idx}, {col_idx})...")
+                        print(f"Sleeping {delay:.2f}s before clicking HIT ({row_idx}, {col_idx})...")
                         await asyncio.sleep(delay)
                         
-                        # Click using exact Row and Column coordinates
                         await event.message.click(row_idx, col_idx)
                         clicked = True
                     else:
                         print(f"⚠️ OCR read an invalid number: {target_num}")
-                    
-            # 2. POKEMON (Poke-selection: "Pick: X")
+                        
+            # 2. POKEMON
             elif "pokemon" in clean_text:
-                # Step 1: Strip out common misspellings of "pick" so we just get the name
                 target_poke = re.sub(r'(?i)(pick|pck|pic|piks|pcks|pcks:)[^a-z]*', '', ocr_text).strip()
-                
-                # If it accidentally stripped everything, fall back to the raw text
                 if not target_poke:
                     target_poke = ocr_text
 
                 if event.message.buttons:
-                    # Step 2: Collect all the text from the buttons
-                    button_texts = []
-                    for row in event.message.buttons:
-                        for btn in row:
-                            button_texts.append(btn.text.lower())
-                    
-                    # Step 3: FUZZY MATCH! Find the button that most closely resembles the OCR gibberish
-                    # cutoff=0.3 means it allows for MASSIVE typos
+                    button_texts = [btn.text.lower() for row in event.message.buttons for btn in row]
                     matches = difflib.get_close_matches(target_poke, button_texts, n=1, cutoff=0.3)
                     
                     if matches:
                         best_match = matches[0]
-                        print(f"🎯 FUZZY MATCH SUCCESS! OCR read '{ocr_text}' -> Matched to button '{best_match}'")
+                        print(f"🎯 POKEMON MATCH SUCCESS! OCR read '{ocr_text}' -> Matched to '{best_match}'")
                         
                         for row_idx, row in enumerate(event.message.buttons):
                             for col_idx, btn in enumerate(row):
@@ -206,27 +196,19 @@ async def game_handler(event):
                                     break
                             if clicked: break
                     else:
-                        print(f"⚠️ Fuzzy Match Failed. Could not link '{target_poke}' to any buttons.")
+                        print(f"⚠️ Pokemon Match Failed. Could not link '{target_poke}' to any buttons.")
 
-            # 3. CODE (Captcha Challenge: "Code")
+            # 3. CODE (Captcha)
             elif "code" in clean_text:
-                # Clean up the OCR text to be just letters and numbers
                 captcha_code = re.sub(r'[^a-z0-9]', '', ocr_text)
                 
                 if captcha_code and event.message.buttons:
-                    # Step 1: Collect all the text from the captcha buttons
-                    button_texts = []
-                    for row in event.message.buttons:
-                        for btn in row:
-                            button_texts.append(btn.text.lower())
-                    
-                    # Step 2: FUZZY MATCH! Find the button that is the closest match
-                    # cutoff=0.5 means it allows for 1 or 2 wrong characters (like 'o' instead of '0')
+                    button_texts = [btn.text.lower() for row in event.message.buttons for btn in row]
                     matches = difflib.get_close_matches(captcha_code, button_texts, n=1, cutoff=0.5)
                     
                     if matches:
                         best_match = matches[0]
-                        print(f"🎯 FUZZY MATCH SUCCESS! OCR read '{captcha_code}' -> Matched to button '{best_match}'")
+                        print(f"🎯 CAPTCHA MATCH SUCCESS! OCR read '{captcha_code}' -> Matched to '{best_match}'")
                         
                         for row_idx, row in enumerate(event.message.buttons):
                             for col_idx, btn in enumerate(row):
@@ -241,18 +223,19 @@ async def game_handler(event):
                     else:
                         print(f"⚠️ Captcha Match Failed. Could not link '{captcha_code}' to any buttons.")
 
-                            
-            # Failsafe: if the host took so long that it failed to click
+            # --- THE NEW FAILSAFE ---
             if not clicked:
-                print("⚠️ OCR failed or returned nothing. Refreshing puzzle...")
-                await send_explore()
-
-            return # Exit handler so we don't accidentally trigger Group 2 or 3
+                print("⚠️ OCR failed to match anything. STOPPING SCRIPT.")
+                is_running = False  # Turn off the main loop
+                # Send a message to yourself so you get a ping on your phone
+                await client.send_message('me', "🔴 **FAILSAFE TRIGGERED:** OCR failed to read the image. Auto-script has been STOPPED.")
+                
+            return 
 
         # ==========================================
         # GROUP 2: COMBAT ENCOUNTERS
         # ==========================================
-        elif any(kw in clean_text for kw in ["yourself", "trembles"]):
+        elif any(kw in clean_text for kw in ["yourself","wander", "trembles"]):
             print("▶ Group 2: Combat Detected.")
             delay = random.uniform(1.0, 2.0)
             print(f"Sleeping {delay:.2f}s before clicking Combat (0,0)...")
@@ -262,10 +245,9 @@ async def game_handler(event):
         # ==========================================
         # GROUP 3: LOOT, DEFEAT & SKIPS
         # ==========================================
-        elif any(kw in clean_text for kw in ["solved", "energy", "seal", "reward", "were", "retreated"]):
+        elif any(kw in clean_text for kw in ["solved", "crate", "seal", "reward", "were", "smiles", "retreated"]):
             current_time = time.time()
             
-            # The 5-Second Cooldown Lock
             if current_time - last_explore_time < 5.0:
                 print("▶ Group 3: Duplicate message caught by Cooldown Lock. Ignoring.")
                 return 
