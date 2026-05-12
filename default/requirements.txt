@@ -1,3 +1,4 @@
-Telethon
+Pillow
 ddddocr
-
+telethon
+ddddocr
